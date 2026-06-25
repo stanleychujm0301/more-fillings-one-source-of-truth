@@ -1,0 +1,98 @@
+# A 股年报法定章节结构
+# 依据：中国证监会《公开发行证券的公司信息披露内容与格式准则第2号——年度报告的内容与格式》（2021年修订）
+
+report_type: "A股年度报告"
+regulatory_basis: "《内容与格式准则第2号》"
+language: "zh"
+
+sections:
+  - id: "A01"
+    name: "重要提示、目录和释义"
+    level: 1
+    required: true
+    notes: "包括董事会声明、审计意见类型提示、重大风险提示"
+
+  - id: "A02"
+    name: "公司简介和主要财务指标"
+    level: 1
+    required: true
+    notes: "公司基本信息、联系人和联系方式、主要会计数据和财务指标"
+
+  - id: "A03"
+    name: "管理层讨论与分析"
+    level: 1
+    required: true
+    notes: "经营情况讨论与分析、行业格局和趋势、公司发展战略、经营计划"
+
+  - id: "A04"
+    name: "公司治理"
+    level: 1
+    required: true
+    notes: "股东大会情况、董事及高级管理人员情况、股权激励、内部控制"
+
+  - id: "A05"
+    name: "环境和社会责任"
+    level: 1
+    required: true
+    notes: "ESG 相关内容，2021 年后从"重要事项"中独立出来"
+
+  - id: "A06"
+    name: "重要事项"
+    level: 1
+    required: true
+    notes: "承诺事项履行情况、控股股东及关联方资金占用、重大诉讼仲裁、关联交易"
+
+  - id: "A07"
+    name: "股份变动及股东情况"
+    level: 1
+    required: true
+    notes: "股份变动情况表、证券发行与上市情况、股东数量和持股情况"
+
+  - id: "A08"
+    name: "优先股相关情况"
+    level: 1
+    required: false
+    notes: "仅发行优先股的公司披露"
+
+  - id: "A09"
+    name: "债券相关情况"
+    level: 1
+    required: false
+    notes: "仅发行债券的公司披露"
+
+  - id: "A10"
+    name: "财务报告"
+    level: 1
+    required: true
+    notes: "审计报告、财务报表（四表一注）、财务报表附注"
+
+  - id: "A10-1"
+    name: "合并资产负债表"
+    level: 2
+    parent: "A10"
+    required: true
+
+  - id: "A10-2"
+    name: "合并利润表"
+    level: 2
+    parent: "A10"
+    required: true
+
+  - id: "A10-3"
+    name: "合并现金流量表"
+    level: 2
+    parent: "A10"
+    required: true
+
+  - id: "A10-4"
+    name: "合并所有者权益变动表"
+    level: 2
+    parent: "A10"
+    required: true
+
+  - id: "A10-5"
+    name: "财务报表附注"
+    level: 2
+    parent: "A10"
+    required: true
+    notes: "附注编号通常为阿拉伯数字，如"附注一、附注二...""

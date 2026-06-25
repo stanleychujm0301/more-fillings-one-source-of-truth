@@ -1,0 +1,156 @@
+# A 股法定章节 ↔ H 股法定章节 映射表
+# 映射规则：基于监管文件规定的法定披露结构，而非具体公司的排版差异
+# confidence: high=直接对应; medium=大体对应但详略有别; low=无直接对应
+
+mappings:
+  # 公司基本信息
+  - a_section_id: "A02"
+    a_section_name: "公司简介和主要财务指标"
+    h_section_id: "H01"
+    h_section_name: "Corporate Information"
+    confidence: high
+    notes: "均包含公司基本信息和联系方式"
+
+  - a_section_id: "A02"
+    a_section_name: "公司简介和主要财务指标"
+    h_section_id: "H02"
+    h_section_name: "Financial Highlights"
+    confidence: high
+    notes: "A股主要财务指标 ↔ H股Financial Highlights"
+
+  # 管理层/董事会报告
+  - a_section_id: "A03"
+    a_section_name: "管理层讨论与分析"
+    h_section_id: "H04"
+    h_section_name: "Directors' Report"
+    confidence: high
+    notes: "核心对应：均包含业务回顾、财务分析、风险因素"
+
+  - a_section_id: "A03"
+    a_section_name: "管理层讨论与分析"
+    h_section_id: "H03"
+    h_section_name: "Chairman's Statement"
+    confidence: medium
+    notes: "部分H股主席报告内容与A股MD&A有重叠"
+
+  # 公司治理
+  - a_section_id: "A04"
+    a_section_name: "公司治理"
+    h_section_id: "H05"
+    h_section_name: "Corporate Governance Report"
+    confidence: high
+    notes: "直接对应：股东大会、董事会、内控等"
+
+  # ESG / 环境和社会责任
+  - a_section_id: "A05"
+    a_section_name: "环境和社会责任"
+    h_section_id: "H06"
+    h_section_name: "Environmental, Social and Governance (ESG) Report"
+    confidence: high
+    notes: "2021年后A股独立ESG章节，与H股ESG Report直接对应"
+
+  # 重要事项 / 合规披露
+  - a_section_id: "A06"
+    a_section_name: "重要事项"
+    h_section_id: "H04"
+    h_section_name: "Directors' Report"
+    confidence: medium
+    notes: "A股重要事项（诉讼、关联交易等）分散在H股Directors' Report中"
+
+  - a_section_id: "A06"
+    a_section_name: "重要事项"
+    h_section_id: "H08"
+    h_section_name: "Report of the Directors - Remuneration"
+    confidence: medium
+    notes: "A股重要事项中的承诺履行、关联交易 ↔ H股董事报告中的相关披露"
+
+  # 股份变动及股东情况
+  - a_section_id: "A07"
+    a_section_name: "股份变动及股东情况"
+    h_section_id: "H04"
+    h_section_name: "Directors' Report"
+    confidence: medium
+    notes: "H股股东信息通常在Directors' Report的Share Capital部分"
+
+  # 优先股
+  - a_section_id: "A08"
+    a_section_name: "优先股相关情况"
+    h_section_id: null
+    h_section_name: null
+    confidence: low
+    notes: "H股无独立优先股章节，相关信息在Notes中披露"
+
+  # 债券
+  - a_section_id: "A09"
+    a_section_name: "债券相关情况"
+    h_section_id: null
+    h_section_name: null
+    confidence: low
+    notes: "H股债券信息在Notes to Financial Statements中"
+
+  # 财务报告
+  - a_section_id: "A10"
+    a_section_name: "财务报告"
+    h_section_id: "H10"
+    h_section_name: "Financial Statements"
+    confidence: high
+    notes: "直接对应"
+
+  - a_section_id: "A10-1"
+    a_section_name: "合并资产负债表"
+    h_section_id: "H10-3"
+    h_section_name: "Consolidated Statement of Financial Position"
+    confidence: high
+    notes: "CAS资产负债表 ↔ IFRS财务状况表（名称不同，内容一致）"
+
+  - a_section_id: "A10-2"
+    a_section_name: "合并利润表"
+    h_section_id: "H10-1"
+    h_section_name: "Consolidated Statement of Profit or Loss"
+    confidence: high
+    notes: "内容一致，H股另附Consolidated Statement of Comprehensive Income"
+
+  - a_section_id: "A10-3"
+    a_section_name: "合并现金流量表"
+    h_section_id: "H10-5"
+    h_section_name: "Consolidated Statement of Cash Flows"
+    confidence: high
+    notes: "内容一致，但CAS和IFRS对利息/股利分类有差异"
+
+  - a_section_id: "A10-4"
+    a_section_name: "合并所有者权益变动表"
+    h_section_id: "H10-4"
+    h_section_name: "Consolidated Statement of Changes in Equity"
+    confidence: high
+    notes: "直接对应"
+
+  - a_section_id: "A10-5"
+    a_section_name: "财务报表附注"
+    h_section_id: "H10-6"
+    h_section_name: "Notes to the Financial Statements"
+    confidence: high
+    notes: "附注结构存在差异，详见 note_map.yaml"
+
+# H股独有章节（A股无直接对应）
+h_only_sections:
+  - id: "H07"
+    name: "Biographies of Directors and Senior Management"
+    notes: "H股要求详细披露董事及高管履历，A股在公司治理章节简要披露"
+
+  - id: "H11"
+    name: "Five-Year Financial Summary"
+    notes: "H股常见但非强制，A股无此要求"
+
+  - id: "H12"
+    name: "Notice of Annual General Meeting"
+    notes: "H股年报常附股东周年大会通告，A股无"
+
+# A股独有章节（H股无直接对应）
+a_only_sections:
+  - id: "A08"
+    name: "优先股相关情况"
+    notes: "A股对优先股有独立章节要求，H股在Notes中披露"
+
+  - id: "A09"
+    name: "债券相关情况"
+    notes: "A股对债券有独立章节要求，H股在Notes中披露"

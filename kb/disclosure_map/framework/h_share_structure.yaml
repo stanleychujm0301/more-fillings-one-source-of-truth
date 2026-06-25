@@ -1,0 +1,116 @@
+# H 股年报法定章节结构
+# 依据：香港联合交易所《上市规则》附录 D1（原附录十六）— 环境、社会及管治报告指引
+
+report_type: "H股年度报告"
+regulatory_basis: "HKLR Appendix D1 / ESG Reporting Guide"
+language: "en"
+
+sections:
+  - id: "H01"
+    name: "Corporate Information"
+    level: 1
+    required: true
+    notes: "公司注册信息、董事及公司秘书信息、股份过户登记处、主要往来银行"
+
+  - id: "H02"
+    name: "Financial Highlights"
+    level: 1
+    required: true
+    notes: "主要财务数据摘要，通常以图表形式呈现"
+
+  - id: "H03"
+    name: "Chairman's Statement"
+    level: 1
+    required: false
+    notes: "主席报告，部分公司合并至 Directors' Report"
+
+  - id: "H04"
+    name: "Directors' Report"
+    level: 1
+    required: true
+    notes: "业务回顾、财务回顾、环境政策及表现、遵守法规情况、主要风险及不明朗因素"
+
+  - id: "H05"
+    name: "Corporate Governance Report"
+    level: 1
+    required: true
+    notes: "企业管治常规、董事及高级管理层、董事会委员会、股东权利、风险管理和内部监控"
+
+  - id: "H06"
+    name: "Environmental, Social and Governance (ESG) Report"
+    level: 1
+    required: true
+    notes: "环境维度、社会维度、管治维度；可独立成章或并入 Directors' Report"
+
+  - id: "H07"
+    name: "Biographies of Directors and Senior Management"
+    level: 1
+    required: true
+    notes: "董事及高级管理人员履历"
+
+  - id: "H08"
+    name: "Report of the Directors - Remuneration"
+    level: 1
+    required: true
+    notes: "董事薪酬报告、薪酬委员会报告、最高薪酬人士"
+
+  - id: "H09"
+    name: "Independent Auditor's Report"
+    level: 1
+    required: true
+    notes: "独立核数师报告"
+
+  - id: "H10"
+    name: "Financial Statements"
+    level: 1
+    required: true
+    notes: "Consolidated Financial Statements and Notes"
+
+  - id: "H10-1"
+    name: "Consolidated Statement of Profit or Loss"
+    level: 2
+    parent: "H10"
+    required: true
+
+  - id: "H10-2"
+    name: "Consolidated Statement of Comprehensive Income"
+    level: 2
+    parent: "H10"
+    required: true
+
+  - id: "H10-3"
+    name: "Consolidated Statement of Financial Position"
+    level: 2
+    parent: "H10"
+    required: true
+
+  - id: "H10-4"
+    name: "Consolidated Statement of Changes in Equity"
+    level: 2
+    parent: "H10"
+    required: true
+
+  - id: "H10-5"
+    name: "Consolidated Statement of Cash Flows"
+    level: 2
+    parent: "H10"
+    required: true
+
+  - id: "H10-6"
+    name: "Notes to the Financial Statements"
+    level: 2
+    parent: "H10"
+    required: true
+    notes: "Note numbering typically 1, 2, 3... or 1.1, 1.2 format"
+
+  - id: "H11"
+    name: "Five-Year Financial Summary"
+    level: 1
+    required: false
+    notes: "五年财务摘要"
+
+  - id: "H12"
+    name: "Notice of Annual General Meeting"
+    level: 1
+    required: false
+    notes: "股东周年大会通告，通常附于年报末尾"

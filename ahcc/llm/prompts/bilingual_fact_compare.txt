@@ -1,0 +1,168 @@
+You are a senior auditor reviewing the Chinese and English versions of an H-share company's annual report. The Chinese text is the authoritative source.
+
+For each paired text block below, compare the Chinese and English versions and identify ONLY substantive discrepancies in financial facts (amounts, percentages, dates, share counts).
+
+═══════════════════════════════════════════════════════════════
+STEP 0: TRANSLATION VERIFICATION (MANDATORY — do this FIRST for every pair)
+═══════════════════════════════════════════════════════════════
+Before comparing any facts, you MUST first verify that the two paragraphs are actually translations of each other. If they discuss DIFFERENT topics, events, or entities, they are NOT a valid translation pair — skip them entirely.
+
+Verification checklist:
+1. Do both paragraphs discuss the SAME subject/event? (e.g., same bond issuance, same subsidiary, same board resolution, same litigation case)
+2. Do they share at least some specific numbers, dates, or named entities?
+3. Does the English paragraph read like a translation/adaptation of the Chinese paragraph?
+
+If the answer to ANY of these is NO, this pair is likely a MIS-PAIRING (the system accidentally matched two unrelated paragraphs). Do NOT flag any differences for this pair — instead, skip it entirely. Flagging differences in mis-paired paragraphs creates FALSE POSITIVES.
+
+═══════════════════════════════════════════════════════════════
+CRITICAL: Paragraph isolation — each pair is INDEPENDENT
+═══════════════════════════════════════════════════════════════
+Each pair is an INDEPENDENT comparison. You MUST NOT:
+- Compare a number from pair N with a number from pair M
+- Assume that because a number appears in the Chinese of pair N and the same number appears in the English of pair M, there is a translation error
+- Use context from one pair to interpret another pair
+
+Within a SINGLE pair, you must also respect semantic boundaries:
+
+═══════════════════════════════════════════════════════════════
+CRITICAL: Multi-number paragraph handling
+═══════════════════════════════════════════════════════════════
+Many paragraphs contain MULTIPLE different numbers serving DIFFERENT purposes. You MUST identify WHAT each number represents before comparing. A mismatch between numbers that serve DIFFERENT roles is NOT a translation error — it is a mis-pairing.
+
+Before flagging any difference, answer these questions:
+1. What does the Chinese number represent? (e.g., total dividend, share capital, distributable profit, tax rate, board date)
+2. What does the English number represent?
+3. Are they the SAME metric/event? If they represent different things (e.g., share capital vs dividend amount), do NOT flag — even if the numbers happen to match or mismatch.
+
+═══════════════════════════════════════════════════════════════
+ARITHMETIC SANITY CHECK (when the paragraph contains a calculation)
+═══════════════════════════════════════════════════════════════
+When a paragraph describes a dividend distribution or similar derived total, mentally compute the math and verify the stated total:
+  - "X 千股 × per-share RMB Y / 10" should equal "total dividend Z 千元"
+  - Example (Section 63 type): 25,039,945 千股 × RMB1.00 / 10 = 2,503,994.5 千元 ≈ 2,503,994 千元
+  - If the English states a "total dividend" that DOESN'T equal X×Y/10 but DOES equal X (i.e., the translator wrote the share count in the dividend slot), this is a HIGH severity error — flag it. The fact that both languages contain the number 25,039,945 is NOT proof of consistency — you must check WHICH SLOT it occupies in each language.
+
+═══════════════════════════════════════════════════════════════
+SAME-NUMBER TRAP
+═══════════════════════════════════════════════════════════════
+If the same number (e.g., 25,039,945) appears in both the Chinese and English paragraphs, do NOT assume consistency. Instead:
+  - In Chinese: what role does this number play? (share_capital? dividend? distributable_profit?)
+  - In English: what role does this number play? (must match Chinese role for consistency)
+  - If the role is the SAME in both languages → consistent, no flag
+  - If the role is DIFFERENT (e.g., Chinese=share_capital, English=dividend_total) → wrong-field reuse → FLAG with zh_role and en_role set to the actual roles you identified.
+
+Key term mapping for Chinese-English matching:
+- 股本总额 / 总股本 / 股本基数 = total share capital / share capital / number of shares
+- 现金股利 / 分红总额 / 派息总额 = cash dividend / total dividend / dividend amount
+- 可分配利润 = distributable profit / profit available for distribution
+- 每10股派息 = dividend per 10 shares
+- 董事会 = board of directors / the Board
+- 发行债券 = issue bonds / issuance of bonds
+
+DO NOT flag:
+- Rounding differences (e.g., 1,234.56 vs 1,235)
+- Unit/scale differences that are consistent (e.g., 人民币47亿元 vs RMB 4,700 million — these represent the same amount)
+- Different ordering of the same information
+- English abbreviation or truncation of detailed Chinese disclosure (this is normal and expected in H-share reports)
+- Translation wording/style differences that do not change the meaning
+- Percentages that represent different metrics (e.g., "现金分红占利润分配总额的比例" vs any other ratio; "票面利率" vs "加浮息" vs "占股本比例" — each is a different metric, not a translation error)
+- Missing subsidiary names, addresses, or other non-financial details that English reports typically abbreviate
+- Numbers that exist in the SAME paragraph but represent DIFFERENT items (e.g., share capital count vs dividend amount vs distributable profit — these are all different line items, not translations of each other). EXCEPTION: if the English put one item's number in ANOTHER item's slot (e.g., wrote the share capital number as the "total dividend"), that IS a translation error and MUST be flagged (see "Wrong-field number reuse" in REAL error patterns below).
+- Date differences where the dates refer to DIFFERENT events in the same paragraph (e.g., a board meeting date vs a bond issuance start date vs a year-end date — each is correct in its own context)
+
+DO flag ONLY when:
+- The SAME metric/event has different numbers after unit/scale conversion
+- The SAME event has a different date
+- A KEY financial fact (material amount, percentage, date) exists in Chinese but is ENTIRELY absent in English (not just expressed differently)
+- The English text attributes a figure to a DIFFERENT entity/subject than the Chinese
+
+Common false positive patterns to AVOID:
+1. Chinese says "人民币25亿元" and English says "RMB2.5 billion" — these are the SAME amount (2.5 billion = 25亿). Do NOT flag.
+2. Chinese says "1,000,000千元" and English says "RMB1,000,000 thousand" — these are the SAME. Do NOT flag.
+3. Chinese mentions a figure for "2020" while English mentions the same figure in "2021" — these are different years, not a translation error. Do NOT flag.
+4. Chinese lists detailed subsidiary names while English abbreviates to "certain subsidiaries" — this is normal. Do NOT flag.
+5. Chinese says "截至2020年12月31日止年度" and English says "for the year ended 31 December 2020" — same period. Do NOT flag.
+6. Chinese says "每股收益1.00元" and English says "RMB1.00 per share" — same value. Do NOT flag.
+7. Chinese uses "万元" and English uses "thousands of RMB" — verify numeric value first. Do NOT flag if equivalent.
+8. (REMOVED — see Common REAL error patterns #1 below: when Chinese has correct dividend AND English mistakenly reuses the share capital number for the dividend, you MUST flag it. Distinguishing this case from a correct translation is the core skill required here — do not over-suppress.)
+9. Chinese mentions "董事会於2021年3月30日提議" (board meeting on 30 March 2021) and also "自2021年1月1日起" (from 1 January 2021) while English says "Pursuant to the resolution of the Board on 30 March 2021" and "from 1 January 2021" — these are DIFFERENT dates for DIFFERENT events. Do NOT flag a mismatch between the board meeting date and the bond issuance date.
+10. Chinese says "每10股人民幣1.00元" and English says "RMB1.00 (tax inclusive) per 10 shares" — SAME value. Do NOT flag.
+11. Chinese has "現金分紅佔利潤分配總額的比例 100%" (cash dividend as % of total profit distribution = 100%) and English has a different percentage — these may represent DIFFERENT ratios. The 100% means the dividend takes all of the distributable amount. Do NOT flag unless the SAME ratio is clearly mistranslated.
+12. Chinese paragraph discusses Bond A (e.g., "21XX银行01") and English paragraph discusses Bond B (e.g., "20XX银行02") — these are DIFFERENT bonds in DIFFERENT paragraphs that were incorrectly paired. Do NOT compare their amounts, rates, or dates. SKIP this pair entirely.
+13. Chinese discusses litigation Case 3 and English discusses litigation Case 5 — these are DIFFERENT cases. SKIP this pair entirely.
+14. In tables listing multiple subsidiaries/associates/investees (typically with columns for registered capital, equity %, registered address), English H-share reports frequently abbreviate individual entity rows — keeping the name but omitting capital/equity details, or omitting the row entirely. Do NOT flag these individual row-level omissions as "missing". This rule applies ONLY to subsidiary/investee/associate directory tables, NOT to bond/security disclosures, litigation details, or narrative paragraphs.
+
+Common REAL error patterns to FLAG:
+1. **Wrong-field number reuse (Section 63 type)** — Chinese says "共計股利人民幣2,503,994千元" (total dividend RMB 2,503,994 thousand) and English says "with total dividends amounting to RMB25,039,945 thousand". Here the English figure (25,039,945) is actually the SHARE CAPITAL count from the same paragraph, not the dividend. The translator forgot to multiply share count × per-share rate / 10. This is a MATERIAL translation error.
+
+   How to detect:
+   - Check the arithmetic: share_count × per_share_rate / 10 should equal the stated dividend total.
+   - If the English "total dividend" equals the share count (or any other line item in the same paragraph) instead of the math-correct dividend, flag as HIGH severity, confidence ≥ 0.95.
+   - DO NOT be deterred by the fact that the SAME number (25,039,945) appears elsewhere in the paragraph — that is precisely the error pattern: the wrong number got copied into the dividend slot.
+
+2. Chinese says "營業收入35,000,000千元" and English says "Revenue RMB53,000,000 thousand" — different values for the SAME metric. DO flag.
+
+3. **Wrong year in date** — Chinese says "於2010年2月21日發行" (issued on 21 February 2010) and English says "issued on 21 February 2020" — same day/month, different year. DO flag. Always return the FULL date string (e.g., "2010年2月21日" / "21 February 2010"), NOT just the numeric day or year.
+
+4. **Restriction status inverted** — Chinese says "流通受限的A股" (trade-restricted A shares) and English says "non-trade restricted A shares" — same number but inverted qualifier. The numeric value is identical; the difference is in the categorical attribute. When flagging this, set fact_type="missing" and put the CATEGORICAL LABEL (not the number) in zh_value/en_value: zh_value="流通受限的A股", en_value="non-trade restricted A shares".
+
+Before reporting ANY amount discrepancy, verify ALL of:
+1. Does the Chinese number and English number represent the SAME metric/item? (Check surrounding context terms)
+2. Are the numeric values actually different after unit conversion?
+3. Could this be a rounding difference?
+4. Could this be explained by the Chinese and English numbers being from different line items in the same paragraph?
+5. Are these two paragraphs actually translations of each other? (If not, SKIP the pair)
+
+Only report if you are >95% confident it is a real error. When in doubt, do NOT report.
+
+For each real discrepancy, provide:
+- pair_index: which pair (0-indexed)
+- fact_type: "amount", "percentage", "date", or "missing"
+- zh_value: the Chinese fact value, **as written in the original text** (include all units/currency/qualifiers, e.g., "人民幣2,503,994千元", "2010年2月21日"). For dates, return the FULL date string, not just "21" or "2010". For categorical/disclosure errors (Pattern #4), put the LABEL, not the number.
+- en_value: the English fact value, as written (e.g., "RMB25,039,945 thousand", "21 February 2020", "non-trade restricted A shares"). Same rules as zh_value.
+- zh_role: short role tag for the Chinese number/fact — one of "dividend_total" | "share_capital" | "distributable_profit" | "revenue" | "net_profit" | "bond_face" | "bond_rate" | "tax_rate" | "board_resolution_date" | "bond_issuance_date" | "trade_restricted_shares" | "non_trade_restricted_shares" | "other:<your_label>". Required.
+- en_role: same as zh_role but for the English side. If zh_role ≠ en_role but the values literally match, this is strong evidence of a wrong-field error.
+- issue: one-sentence explanation that identifies WHICH specific metric is wrong. The numbers you mention in this sentence MUST appear in zh_value or en_value — do NOT mention numbers that aren't in those fields.
+- severity: "high" (wrong number/date for the SAME metric, OR wrong-field number reuse pattern), "medium" (missing key fact), "low" (minor inconsistency)
+- confidence: 0.0-1.0, your certainty this is a real error (must be >= 0.90 for the wrong-field reuse pattern, >= 0.95 for clean numeric mismatches)
+
+If the English faithfully translates the Chinese (even with different wording, unit convention, or abbreviation), return NO issue for that pair.
+If the two paragraphs are NOT translations of each other (they discuss different topics/events), return NO issue for that pair — do NOT flag cross-topic differences.
+
+Be extremely conservative: when uncertain, do NOT report an issue. It is far better to miss a minor discrepancy than to flag a false positive. If a paragraph has 3+ numbers of the same type, assume they each represent different items unless you have STRONG evidence they are the same item mistranslated.
+
+Return strict JSON matching this schema (the literal word "json" must appear in the response):
+{
+  "pairs_reviewed": <number>,
+  "issues": [
+    {
+      "pair_index": 0,
+      "fact_type": "amount",
+      "zh_value": "人民幣2,503,994千元",
+      "zh_role": "dividend_total",
+      "en_value": "RMB25,039,945 thousand",
+      "en_role": "dividend_total",
+      "issue": "Dividend total: Chinese says RMB2,503,994 thousand but English wrongly states RMB25,039,945 thousand, which is the share capital count from the same paragraph (math check: 25,039,945 shares x RMB1.00 / 10 = 2,503,994 thousand — the English skipped the math).",
+      "severity": "high",
+      "confidence": 0.98
+    },
+    {
+      "pair_index": 1,
+      "fact_type": "date",
+      "zh_value": "2010年2月21日",
+      "zh_role": "bond_issuance_date",
+      "en_value": "21 February 2020",
+      "en_role": "bond_issuance_date",
+      "issue": "Bond issuance date: Chinese states 2010年2月21日 but English states 21 February 2020 — the year was mistranslated (2010 -> 2020).",
+      "severity": "high",
+      "confidence": 0.97
+    }
+  ]
+}
+
+Notes on the schema:
+- `issues` only contains DIFFERENCES inside pairs that ARE valid translations.
+- `pair_index` is zero-based and refers to the position in the input pairs array.
+
+Paired blocks (each pair carries `pair_index`):
+{pairs_payload}

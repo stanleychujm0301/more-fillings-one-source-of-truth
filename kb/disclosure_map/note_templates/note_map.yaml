@@ -1,0 +1,224 @@
+# CAS 附注 ↔ HKFRS Note 映射表
+# 映射规则：基于准则主题内容对应，而非具体编号对应
+# 注意：不同公司的附注编号差异很大，映射应基于内容主题而非编号
+
+mappings:
+  # 一般信息
+  - cas_note_id: "CAS-N01"
+    cas_note_name: "公司基本情况"
+    hkfrs_note_id: "HK-N01"
+    hkfrs_note_name: "General Information"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N02"
+    cas_note_name: "财务报表的编制基础"
+    hkfrs_note_id: "HK-N02"
+    hkfrs_note_name: "Basis of Preparation"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N03"
+    cas_note_name: "遵循企业会计准则的声明"
+    hkfrs_note_id: "HK-N03"
+    hkfrs_note_name: "Adoption of New and Revised HKFRSs"
+    confidence: medium
+    notes: "CAS为合规声明，HKFRS为准则变更；内容相关但不完全对应"
+
+  - cas_note_id: "CAS-N04"
+    cas_note_name: "重要会计政策和会计估计"
+    hkfrs_note_id: "HK-N04"
+    hkfrs_note_name: "Significant Accounting Policies"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N05"
+    cas_note_name: "会计政策和会计估计变更以及差错更正"
+    hkfrs_note_id: "HK-N03"
+    hkfrs_note_name: "Adoption of New and Revised HKFRSs"
+    confidence: medium
+    notes: "CAS单独列示变更和差错更正，HKFRS在准则变更中体现"
+
+  # 资产负债表项目
+  - cas_note_id: "CAS-N08"
+    cas_note_name: "货币资金"
+    hkfrs_note_id: "HK-N20"
+    hkfrs_note_name: "Cash and Cash Equivalents / Pledged Deposits"
+    confidence: high
+    notes: "CAS货币资金 ↔ HKFRS Cash and Cash Equivalents"
+
+  - cas_note_id: "CAS-N09"
+    cas_note_name: "应收票据及应收账款"
+    hkfrs_note_id: "HK-N19"
+    hkfrs_note_name: "Trade and Other Receivables"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N10"
+    cas_note_name: "存货"
+    hkfrs_note_id: "HK-N18"
+    hkfrs_note_name: "Inventories"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N11"
+    cas_note_name: "长期股权投资"
+    hkfrs_note_id: "HK-N16"
+    hkfrs_note_name: "Interests in Associates and Joint Ventures"
+    confidence: high
+    notes: "直接对应；注意HKFRS可能将子公司投资单独列示"
+
+  - cas_note_id: "CAS-N12"
+    cas_note_name: "投资性房地产"
+    hkfrs_note_id: "HK-N13"
+    hkfrs_note_name: "Investment Properties"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N13"
+    cas_note_name: "固定资产"
+    hkfrs_note_id: "HK-N12"
+    hkfrs_note_name: "Property, Plant and Equipment"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N15"
+    cas_note_name: "无形资产"
+    hkfrs_note_id: "HK-N15"
+    hkfrs_note_name: "Other Intangible Assets"
+    confidence: high
+    notes: "CAS通常将商誉和无形资产合并或分别披露；HKFRS通常分开"
+
+  - cas_note_id: "CAS-N16"
+    cas_note_name: "商誉"
+    hkfrs_note_id: "HK-N14"
+    hkfrs_note_name: "Goodwill"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N19"
+    cas_note_name: "短期借款及长期借款"
+    hkfrs_note_id: null
+    hkfrs_note_name: null
+    confidence: medium
+    notes: "HKFRS通常将借款嵌入Financial Instruments或单独在Note中披露，无统一标准Note"
+
+  - cas_note_id: "CAS-N20"
+    cas_note_name: "应付职工薪酬"
+    hkfrs_note_id: "HK-N07"
+    hkfrs_note_name: "Staff Costs and Directors' Emoluments"
+    confidence: high
+    notes: "直接对应；HKFRS通常更详细披露董事薪酬（按姓名）"
+
+  - cas_note_id: "CAS-N21"
+    cas_note_name: "应交税费"
+    hkfrs_note_id: "HK-N09"
+    hkfrs_note_name: "Income Tax Expense"
+    confidence: medium
+    notes: "CAS单独列示应交税费余额，HKFRS通常在Taxation Note中合并披露"
+
+  - cas_note_id: "CAS-N23"
+    cas_note_name: "租赁"
+    hkfrs_note_id: "HK-N22"
+    hkfrs_note_name: "Lease Liabilities"
+    confidence: high
+    notes: "直接对应（新租赁准则CAS 21 ↔ HKFRS 16）"
+
+  - cas_note_id: "CAS-N24"
+    cas_note_name: "金融工具"
+    hkfrs_note_id: "HK-N17"
+    hkfrs_note_name: "Financial Instruments"
+    confidence: high
+    notes: "直接对应"
+
+  # 损益表项目
+  - cas_note_id: "CAS-N06"
+    cas_note_name: "税项"
+    hkfrs_note_id: "HK-N09"
+    hkfrs_note_name: "Income Tax Expense"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N26"
+    cas_note_name: "收入"
+    hkfrs_note_id: "HK-N06"
+    hkfrs_note_name: "Revenue and Segment Information"
+    confidence: high
+    notes: "CAS收入 ↔ HKFRS Revenue；注意HKFRS通常将分部报告与收入合并"
+
+  - cas_note_id: "CAS-N27"
+    cas_note_name: "政府补助"
+    hkfrs_note_id: null
+    hkfrs_note_name: null
+    confidence: medium
+    notes: "HKFRS通常嵌入Other Income或政府补助事项中，无统一标准Note"
+
+  - cas_note_id: "CAS-N28"
+    cas_note_name: "股份支付"
+    hkfrs_note_id: "HK-N07"
+    hkfrs_note_name: "Staff Costs and Directors' Emoluments"
+    confidence: medium
+    notes: "HKFRS通常在Staff Costs中披露股份支付，CAS可能单独列示"
+
+  # 合并报表
+  - cas_note_id: "CAS-N07"
+    cas_note_name: "企业合并及合并财务报表"
+    hkfrs_note_id: "HK-N30"
+    hkfrs_note_name: "Subsidiaries and Non-controlling Interests"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N25"
+    cas_note_name: "资本公积及留存收益"
+    hkfrs_note_id: "HK-N24"
+    hkfrs_note_name: "Share Capital, Reserves and Distributability"
+    confidence: high
+    notes: "直接对应"
+
+  # 其他
+  - cas_note_id: "CAS-N17"
+    cas_note_name: "递延所得税资产和负债"
+    hkfrs_note_id: "HK-N23"
+    hkfrs_note_name: "Deferred Tax"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N18"
+    cas_note_name: "资产减值准备"
+    hkfrs_note_id: null
+    hkfrs_note_name: null
+    confidence: medium
+    notes: "HKFRS减值信息分散在各资产Note中，无统一减值准备汇总表"
+
+  - cas_note_id: "CAS-N22"
+    cas_note_name: "预计负债"
+    hkfrs_note_id: "HK-N27"
+    hkfrs_note_name: "Commitments and Contingencies"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N29"
+    cas_note_name: "关联方及关联交易"
+    hkfrs_note_id: "HK-N26"
+    hkfrs_note_name: "Related Party Transactions"
+    confidence: high
+    notes: "直接对应；注意HKFRS要求披露关键管理人员薪酬（按姓名），CAS通常汇总"
+
+  - cas_note_id: "CAS-N30"
+    cas_note_name: "或有事项"
+    hkfrs_note_id: "HK-N27"
+    hkfrs_note_name: "Commitments and Contingencies"
+    confidence: high
+    notes: "直接对应"
+
+  - cas_note_id: "CAS-N31"
+    cas_note_name: "资产负债表日后事项"
+    hkfrs_note_id: "HK-N29"
+    hkfrs_note_name: "Events After the Reporting Period"
+    confidence: high
+    notes: "直接对应"
+
+# 映射置信度统计
+# high: 28 条
+# medium: 7 条
+# low: 0 条

@@ -1,0 +1,87 @@
+你是资深审计师，正在审阅一份上市公司年度报告。请从下面的年报片段中抽取关键财务数据点，输出严格 JSON 格式。
+
+# 任务
+
+抽取下列 30 个关键数据点（如果在片段中找到的话）：
+
+## 资产负债表
+1. 货币资金 (cash_equivalents)
+2. 应收账款 (receivables)
+3. 存货 (inventory)
+4. 流动资产合计 (current_assets)
+5. 固定资产 (fixed_assets)
+6. 在建工程 (construction_in_progress)
+7. 商誉 (goodwill)
+8. 无形资产 (intangible_assets)
+9. 长期股权投资 (long_term_investments)
+10. 非流动资产合计 (non_current_assets)
+11. 资产总计 (total_assets)
+12. 短期借款 (short_term_borrowings)
+13. 应付账款 (payables)
+14. 流动负债合计 (current_liabilities)
+15. 长期借款 (long_term_borrowings)
+16. 负债合计 (total_liabilities)
+17. 实收资本/股本 (share_capital)
+18. 资本公积 (capital_reserve)
+19. 留存收益 (retained_earnings)
+20. 所有者权益合计 (equity)
+
+## 利润表
+21. 营业收入 (revenue)
+22. 营业成本 (cost_of_sales)
+23. 营业利润 (operating_profit)
+24. 利润总额 (total_profit)
+25. 净利润 (net_profit)
+26. 归属于母公司股东的净利润 (net_profit_attributable)
+27. 基本每股收益 (eps_basic)
+
+## 现金流量表
+28. 经营活动产生的现金流量净额 (operating_cash_flow)
+29. 投资活动产生的现金流量净额 (investing_cash_flow)
+30. 筹资活动产生的现金流量净额 (financing_cash_flow)
+
+# 输入
+
+报告类型：{side}（A 股=中国大陆 CAS / H 股=香港 HKFRS）
+主要语言：{language}
+币种：{currency}
+报告期：{period}
+所属章节：{section}
+
+文本/表格内容（含原始坐标信息）：
+
+{content}
+
+# 输出要求
+
+严格按以下 JSON 格式输出，未找到的项不要出现：
+
+```json
+{
+  "datapoints": [
+    {
+      "canonical_key": "total_assets",
+      "name_zh": "资产总计",
+      "name_en": "Total assets",
+      "value": 1234567.89,
+      "value_text": "1,234,567.89",
+      "unit": "人民币百万元",
+      "currency": "CNY",
+      "period": "2024-12-31",
+      "evidence": {
+        "page": 45,
+        "bbox": [56.7, 234.1, 540.3, 251.0],
+        "snippet": "资产总计 1,234,567.89",
+        "section": "合并资产负债表"
+      },
+      "confidence": 0.95
+    }
+  ]
+}
+```
+
+注意：
+- value 必须是 float 类型，去除千分位逗号和单位
+- 若片段含"百万元"/"千元"等单位，要忠实记录在 unit 字段，不要擅自换算到元
+- evidence.snippet 不超过 100 字
+- 没有把握的项目 confidence < 0.7，避免胡编乱造

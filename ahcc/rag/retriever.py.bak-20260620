@@ -1,0 +1,43 @@
+"""准则 RAG 检索（P4 实现）。"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from loguru import logger
+
+from ahcc.config import settings
+
+
+@lru_cache(maxsize=1)
+def _get_collection():
+    import chromadb
+    client = chromadb.PersistentClient(path=str(settings.chroma_persist_dir))
+    return client.get_or_create_collection(name="standard_kb")
+
+
+@lru_cache(maxsize=1)
+def _get_embedder():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("BAAI/bge-m3")
+
+
+def retrieve_clauses(query: str, top_k: int = 4) -> list[dict]:
+    """语义检索准则条款。返回 [{text, meta, distance}]。"""
+    try:
+        collection = _get_collection()
+        if collection.count() == 0:
+            logger.warning("准则 RAG 库为空，请先运行 scripts/build_kb.py")
+            return []
+        embed = _get_embedder().encode([query], normalize_embeddings=True).tolist()
+        result = collection.query(query_embeddings=embed, n_results=top_k)
+    except Exception as exc:
+        logger.warning(f"RAG 检索失败: {exc}")
+        return []
+
+    return [
+        {"text": doc, "meta": meta, "distance": dist}
+        for doc, meta, dist in zip(
+            result["documents"][0], result["metadatas"][0], result["distances"][0], strict=True
+        )
+    ]

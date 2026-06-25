@@ -1,0 +1,58 @@
+# 勾稽校验规则 — 每份报告内部的逻辑一致性
+#
+# expression 中可使用的变量：所有 canonical_key
+# 支持运算符：+ - * / == != < <= > >=
+#
+# 这些规则会在 A 股内、H 股内分别执行
+# 若任一边违反，标 CRITICAL（说明数据本身不自洽）
+
+rules:
+  - rule_id: CC-001
+    name: 资产 = 流动资产 + 非流动资产
+    description: 资产负债表恒等式
+    rule_type: cross_check
+    targets: [total_assets, current_assets, non_current_assets]
+    expression: "total_assets == current_assets + non_current_assets"
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: CC-002
+    name: 资产 = 负债 + 所有者权益
+    description: 会计恒等式
+    rule_type: cross_check
+    targets: [total_assets, total_liabilities, total_equity]
+    expression: "total_assets == total_liabilities + total_equity"
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: CC-003
+    name: 流动负债 ≤ 负债合计
+    description: 流动负债应不超过负债合计
+    rule_type: cross_check
+    targets: [current_liabilities, total_liabilities]
+    expression: "current_liabilities <= total_liabilities"
+    tolerance: 0
+    severity: high
+    enabled: true
+
+  - rule_id: CC-004
+    name: 研发投入 = 费用化 + 资本化
+    description: CAS 与 IFRS 共同的勾稽
+    rule_type: cross_check
+    targets: [rnd_total, rnd_expensed, rnd_capitalized]
+    expression: "rnd_total == rnd_expensed + rnd_capitalized"
+    tolerance: 0
+    severity: high
+    enabled: true
+
+  - rule_id: CC-005
+    name: 净利润 ≥ 归母净利润（合并报表）
+    description: 合并净利润包含少数股东损益
+    rule_type: cross_check
+    targets: [net_profit, net_profit_attributable]
+    expression: "net_profit >= net_profit_attributable"
+    tolerance: 0
+    severity: high
+    enabled: true

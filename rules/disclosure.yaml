@@ -1,0 +1,63 @@
+# 披露范围/格式规则 — 检查 A 股 vs H 股披露项的覆盖差异
+#
+# rule_type: disclosure
+# 在数据点一侧出现而另一侧缺失时触发
+# 严重度按"该项是否双方都要求披露"分级
+
+rules:
+  - rule_id: DSC-001
+    name: 关联方交易披露完整性
+    description: A 股年报关联方披露通常多于 H 股，但核心项目应双方都有
+    rule_type: disclosure
+    targets:
+      - related_party_transactions_total
+    severity: medium
+    enabled: true
+
+  - rule_id: DSC-002
+    name: ESG 范围一/二温室气体排放披露
+    description: H 股已强制，A 股 2024 起强制；都应披露
+    rule_type: disclosure
+    targets:
+      - scope1_emissions
+      - scope2_emissions
+    severity: medium
+    enabled: true
+
+  - rule_id: DSC-003
+    name: 范围三温室气体排放披露
+    description: H 股鼓励披露，A 股鼓励披露；单侧缺失记 INFO
+    rule_type: disclosure
+    targets:
+      - scope3_emissions
+    severity: low
+    enabled: true
+
+  - rule_id: DSC-004
+    name: 员工性别比 / 独立董事占比披露
+    description: 检查员工结构及董事会独立性披露
+    rule_type: disclosure
+    targets:
+      - employees_female_pct
+      - independent_directors_pct
+    severity: low
+    enabled: true
+
+  - rule_id: DSC-005
+    name: 商誉减值测试关键假设披露（敏感性分析）
+    description: A 股要求详细披露关键假设和敏感性，H 股可能简略
+    rule_type: disclosure
+    targets:
+      - goodwill_impairment_key_assumptions
+    severity: low
+    enabled: true
+
+  - rule_id: DSC-006
+    name: 永续债分类与归类口径披露
+    description: 永续债在 A/H 报表中分类不同（权益 vs 负债），需明确说明
+    rule_type: disclosure
+    targets:
+      - perpetual_bonds_equity
+      - perpetual_bonds_liability
+    severity: high
+    enabled: true

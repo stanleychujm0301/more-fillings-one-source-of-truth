@@ -1,0 +1,154 @@
+# 数值相等性规则 — P3 主负责，P6 业务校准
+#
+# 每条规则定义：
+#   targets: 涉及的 canonical_key 列表
+#   tolerance: 允许的绝对差异（同币种、同单位归一后）
+#   severity: 触发后的严重度
+#   rule_type: numeric_equal | tolerance
+#
+# 容差设计原则：
+#   - 严格一致项（净利润、总资产、总负债）：容差 0（任何差异都报）
+#   - 趋同但仍有口径差（研发资本化、政府补助）：容差 5%
+#   - 准则差异较大（投资性房地产、永续债）：容差 30%
+
+rules:
+  # ========== 资产负债表（严格一致）==========
+  - rule_id: BS-001
+    name: 资产总计一致
+    description: A 股资产总计 与 H 股 Total assets 应严格一致
+    rule_type: numeric_equal
+    targets: [total_assets]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: BS-002
+    name: 负债合计一致
+    description: A 股负债合计 与 H 股 Total liabilities 应严格一致
+    rule_type: numeric_equal
+    targets: [total_liabilities]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: BS-003
+    name: 所有者权益合计一致
+    description: A 股所有者权益合计 与 H 股 Total equity 应严格一致
+    rule_type: numeric_equal
+    targets: [total_equity]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: BS-004
+    name: 货币资金一致
+    description: A 股货币资金 与 H 股 Cash and cash equivalents 应严格一致
+    rule_type: numeric_equal
+    targets: [cash_equivalents]
+    tolerance: 0
+    severity: high
+    enabled: true
+
+  - rule_id: BS-005
+    name: 商誉余额一致
+    description: 同一企业商誉应严格一致（CAS 与 IFRS 趋同）
+    rule_type: numeric_equal
+    targets: [goodwill]
+    tolerance: 0
+    severity: high
+    enabled: true
+
+  # ========== 利润表（严格一致）==========
+  - rule_id: PL-001
+    name: 营业收入一致
+    description: A 股营业收入 与 H 股 Revenue 应严格一致
+    rule_type: numeric_equal
+    targets: [revenue]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: PL-002
+    name: 净利润一致
+    description: A 股净利润 与 H 股 Net profit 应严格一致
+    rule_type: numeric_equal
+    targets: [net_profit]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: PL-003
+    name: 归母净利润一致
+    description: A 股归母净利润 与 H 股 Net profit attributable to parent 应严格一致
+    rule_type: numeric_equal
+    targets: [net_profit_attributable]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  - rule_id: PL-004
+    name: 基本每股收益一致
+    description: A 股基本每股收益 与 H 股 Basic EPS 应严格一致
+    rule_type: numeric_equal
+    targets: [eps_basic]
+    tolerance: 0
+    severity: high
+    enabled: true
+
+  # ========== 现金流量表（期末余额必须一致）==========
+  - rule_id: CF-001
+    name: 期末现金等价物余额一致
+    description: 期末现金及现金等价物余额应严格一致
+    rule_type: numeric_equal
+    targets: [cash_equivalents_end]
+    tolerance: 0
+    severity: critical
+    enabled: true
+
+  # ========== 趋同但有口径差（容差 5%）==========
+  - rule_id: ND-001
+    name: 研发资本化金额（容差 5%）
+    description: CAS 6 与 IAS 38 资本化时点判断差异，方向预期 A ≤ H
+    rule_type: tolerance
+    targets: [rnd_capitalized]
+    tolerance: 0.05
+    severity: medium
+    enabled: true
+
+  - rule_id: ND-002
+    name: 研发投入合计（容差 1%）
+    description: 总研发投入 = 费用化 + 资本化，应一致
+    rule_type: tolerance
+    targets: [rnd_total]
+    tolerance: 0.01
+    severity: high
+    enabled: true
+
+  # ========== 准则结构性差异（容差 30%）==========
+  - rule_id: ND-101
+    name: 投资性房地产（容差 30%）
+    description: A 股可能用成本模式 / H 股可能用公允价值模式，容差放宽
+    rule_type: tolerance
+    targets: [investment_property]
+    tolerance: 0.30
+    severity: medium
+    enabled: true
+
+  # ========== ESG 指标（容差 1%）==========
+  - rule_id: ESG-001
+    name: 范围一温室气体排放（容差 1%）
+    description: 温室气体范围一排放应一致
+    rule_type: tolerance
+    targets: [scope1_emissions]
+    tolerance: 0.01
+    severity: high
+    enabled: true
+
+  - rule_id: ESG-002
+    name: 员工总数（容差 0.5%）
+    description: 员工总数应一致
+    rule_type: tolerance
+    targets: [employees_total]
+    tolerance: 0.005
+    severity: high
+    enabled: true

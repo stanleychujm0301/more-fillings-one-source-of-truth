@@ -1,0 +1,44 @@
+你是会计/审计领域的中英双语专家。下面给你 A 股年报和 H 股年报中各自抽取的关键数据点列表，请把它们按"业务含义相同"两两匹配起来。
+
+# 输入
+
+## A 股数据点（中文）
+{a_points_json}
+
+## H 股数据点（英文/中文双语）
+{h_points_json}
+
+## 中英术语对照（参考）
+{glossary}
+
+# 输出要求
+
+严格 JSON 格式：
+
+```json
+{
+  "pairs": [
+    {
+      "canonical_key": "total_assets",
+      "topic_zh": "资产总计",
+      "topic_en": "Total assets",
+      "a_index": 5,
+      "h_index": 3,
+      "alignment_confidence": 0.98,
+      "reason": "中英对应 + 数量级一致"
+    }
+  ],
+  "unmatched_a": [12, 17],
+  "unmatched_h": [9],
+  "notes": "未匹配项简要说明"
+}
+```
+
+# 匹配准则
+
+- `canonical_key` 必须使用 snake_case 英文规范键名（如 total_assets / net_profit_attributable_to_parent）
+- `a_index` / `h_index` 是输入列表中的 0-based 下标
+- 同一 canonical_key 只能匹配一对，禁止一对多
+- 如果某项在 A 股是合并口径，H 股是母公司口径，**不应该匹配** — 标到 unmatched 并在 notes 说明
+- alignment_confidence < 0.7 的不要输出，宁缺勿滥
+- 单位/币种不一致允许匹配，alignment_confidence 在 0.7~0.9 之间，后续在 NumericChecker 中做单位归一

@@ -1,0 +1,320 @@
+# HKFRS 财务报表附注标准索引
+# 依据：香港财务报告准则（HKFRS）实务惯例及香港会计师公会指引
+# 注：H股公司附注编号通常为连续数字（Note 1, 2, 3...），标题较CAS更标准化
+# 以下为最常见的标准附注结构
+
+standard:
+  name: "HKFRS Notes to the Financial Statements - Standard Structure"
+  basis: "HKFRS Practice Statement / HKICPA Guidance"
+
+notes:
+  - id: "HK-N01"
+    name: "General Information"
+    category: "general"
+    common_titles:
+      - "General Information"
+      - "Corporate Information"
+    required: true
+    content_summary: "Company registration, domicile, principal activities"
+
+  - id: "HK-N02"
+    name: "Basis of Preparation"
+    category: "general"
+    common_titles:
+      - "Basis of Preparation"
+      - "Basis of Preparation of Consolidated Financial Statements"
+    required: true
+    content_summary: "Going concern, accounting standards, functional/presentation currency, reporting period"
+
+  - id: "HK-N03"
+    name: "Adoption of New and Revised HKFRSs"
+    category: "general"
+    common_titles:
+      - "Adoption of New and Revised HKFRSs"
+      - "Changes in Accounting Policies"
+    required: true
+
+  - id: "HK-N04"
+    name: "Significant Accounting Policies"
+    category: "policy"
+    common_titles:
+      - "Significant Accounting Policies"
+      - "Summary of Significant Accounting Policies"
+    required: true
+    content_summary: "Revenue recognition, depreciation, inventory, financial instruments, leases, etc."
+
+  - id: "HK-N05"
+    name: "Critical Accounting Judgements and Key Sources of Estimation Uncertainty"
+    category: "policy"
+    common_titles:
+      - "Critical Accounting Judgements and Key Sources of Estimation Uncertainty"
+      - "Critical Accounting Estimates and Judgements"
+    required: true
+
+  - id: "HK-N06"
+    name: "Revenue and Segment Information"
+    category: "income"
+    common_titles:
+      - "Revenue and Segment Information"
+      - "Revenue"
+      - "Operating Segments"
+    required: true
+    content_summary: "Revenue breakdown by category/region, segment reporting (HKFRS 8)"
+
+  - id: "HK-N07"
+    name: "Staff Costs and Directors' Emoluments"
+    category: "personnel"
+    common_titles:
+      - "Staff Costs"
+      - "Directors' Emoluments"
+      - "Share-based Payments"
+    required: true
+    content_summary: "Employee benefits, retirement schemes, directors' remuneration (often by name)"
+
+  - id: "HK-N08"
+    name: "Profit Before Tax"
+    category: "income"
+    common_titles:
+      - "Profit Before Tax"
+    required: true
+    content_summary: "Expenses by nature, other income/gains"
+
+  - id: "HK-N09"
+    name: "Income Tax Expense"
+    category: "tax"
+    common_titles:
+      - "Income Tax Expense"
+      - "Taxation"
+    required: true
+    content_summary: "Current tax, deferred tax, reconciliation of effective tax rate"
+
+  - id: "HK-N10"
+    name: "Dividends"
+    category: "equity"
+    common_titles:
+      - "Dividends"
+    required: true
+
+  - id: "HK-N11"
+    name: "Earnings Per Share"
+    category: "income"
+    common_titles:
+      - "Earnings Per Share"
+      - "EPS"
+    required: true
+
+  - id: "HK-N12"
+    name: "Property, Plant and Equipment"
+    category: "balance_sheet"
+    common_titles:
+      - "Property, Plant and Equipment"
+      - "PPE"
+    required: true
+
+  - id: "HK-N13"
+    name: "Investment Properties"
+    category: "balance_sheet"
+    common_titles:
+      - "Investment Properties"
+    required: false
+
+  - id: "HK-N14"
+    name: "Goodwill"
+    category: "balance_sheet"
+    common_titles:
+      - "Goodwill"
+      - "Impairment Testing of Goodwill"
+    required: false
+
+  - id: "HK-N15"
+    name: "Other Intangible Assets"
+    category: "balance_sheet"
+    common_titles:
+      - "Other Intangible Assets"
+      - "Intangible Assets"
+    required: false
+
+  - id: "HK-N16"
+    name: "Interests in Associates and Joint Ventures"
+    category: "balance_sheet"
+    common_titles:
+      - "Interests in Associates"
+      - "Interests in Joint Ventures"
+      - "Investments in Associates and Joint Ventures"
+    required: false
+
+  - id: "HK-N17"
+    name: "Financial Instruments"
+    category: "balance_sheet"
+    common_titles:
+      - "Financial Instruments"
+      - "Financial Assets and Financial Liabilities"
+    required: true
+    content_summary: "Classification, impairment, fair value hierarchy, risk management disclosures"
+
+  - id: "HK-N18"
+    name: "Inventories"
+    category: "balance_sheet"
+    common_titles:
+      - "Inventories"
+    required: false
+
+  - id: "HK-N19"
+    name: "Trade and Other Receivables"
+    category: "balance_sheet"
+    common_titles:
+      - "Trade and Other Receivables"
+      - "Trade Receivables"
+    required: true
+
+  - id: "HK-N20"
+    name: "Cash and Cash Equivalents / Pledged Deposits"
+    category: "balance_sheet"
+    common_titles:
+      - "Cash and Cash Equivalents"
+      - "Bank Balances and Cash"
+    required: true
+
+  - id: "HK-N21"
+    name: "Trade and Other Payables"
+    category: "balance_sheet"
+    common_titles:
+      - "Trade and Other Payables"
+    required: true
+
+  - id: "HK-N22"
+    name: "Lease Liabilities"
+    category: "balance_sheet"
+    common_titles:
+      - "Lease Liabilities"
+      - "Leases"
+    required: false
+    content_summary: "HKFRS 16 disclosures"
+
+  - id: "HK-N23"
+    name: "Deferred Tax"
+    category: "balance_sheet"
+    common_titles:
+      - "Deferred Tax"
+      - "Deferred Tax Assets and Liabilities"
+    required: true
+
+  - id: "HK-N24"
+    name: "Share Capital, Reserves and Distributability"
+    category: "equity"
+    common_titles:
+      - "Share Capital and Reserves"
+      - "Capital and Reserves"
+    required: true
+
+  - id: "HK-N25"
+    name: "Business Combinations"
+    category: "consolidation"
+    common_titles:
+      - "Business Combinations"
+      - "Acquisitions"
+    required: false
+
+  - id: "HK-N26"
+    name: "Related Party Transactions"
+    category: "related_party"
+    common_titles:
+      - "Related Party Transactions"
+      - "Related Party Disclosures"
+    required: true
+    content_summary: "Related party list, transaction types and amounts, pricing policies, key management compensation"
+
+  - id: "HK-N27"
+    name: "Commitments and Contingencies"
+    category: "contingency"
+    common_titles:
+      - "Commitments and Contingencies"
+      - "Contingent Liabilities"
+    required: true
+
+  - id: "HK-N28"
+    name: "Notes to Consolidated Statement of Cash Flows"
+    category: "cash_flow"
+    common_titles:
+      - "Notes to Consolidated Statement of Cash Flows"
+      - "Cash Flow Notes"
+    required: true
+    content_summary: "Reconciliation of liabilities from financing activities, cash and cash equivalents reconciliation"
+
+  - id: "HK-N29"
+    name: "Events After the Reporting Period"
+    category: "subsequent"
+    common_titles:
+      - "Events After the Reporting Period"
+      - "Subsequent Events"
+    required: true
+
+  - id: "HK-N30"
+    name: "Subsidiaries and Non-controlling Interests"
+    category: "consolidation"
+    common_titles:
+      - "Subsidiaries"
+      - "Particulars of Principal Subsidiaries"
+    required: true
+    content_summary: "List of principal subsidiaries, NCI details"
+
+  - id: "HK-N31"
+    name: "Acquisition of Subsidiaries / Disposal"
+    category: "consolidation"
+    common_titles:
+      - "Acquisition of Subsidiaries"
+      - "Disposal of Subsidiaries"
+    required: false
+
+  - id: "HK-N32"
+    name: "Fair Value Measurements"
+    category: "balance_sheet"
+    common_titles:
+      - "Fair Value Measurements"
+      - "Financial Instruments - Fair Value"
+    required: true
+    content_summary: "Fair value hierarchy (Level 1/2/3), valuation techniques, sensitivity analysis"
+
+  - id: "HK-N33"
+    name: "Hedging Activities"
+    category: "balance_sheet"
+    common_titles:
+      - "Hedging Activities"
+      - "Derivative Financial Instruments"
+    required: false
+
+  - id: "HK-N34"
+    name: "Other Significant Matters"
+    category: "other"
+    common_titles:
+      - "Other Significant Matters"
+      - "Other Information"
+    required: false
+
+# HKFRS 独有披露（CAS 通常不单独列示）
+hk_only_notes:
+  - id: "HK-N07"
+    name: "Directors' Emoluments by Name"
+    notes: "H股要求按姓名披露董事薪酬，CAS通常汇总披露"
+
+  - id: "HK-N10"
+    name: "Dividends"
+    notes: "H股单独披露股息，CAS在利润分配中体现"
+
+  - id: "HK-N30"
+    name: "Particulars of Principal Subsidiaries"
+    notes: "H股要求详细列示子公司注册地、股本、持股比例"
+
+  - id: "HK-N32"
+    name: "Fair Value Measurements - Detailed Hierarchy"
+    notes: "H股对公允价值层级披露通常更详细，含估值技术披露"
+
+# CAS 独有披露（HKFRS 通常嵌入其他 Note）
+cas_only_notes:
+  - id: "CAS-N08"
+    name: "货币资金"
+    notes: "CAS单独披露货币资金明细，HKFRS通常在Cash and Cash Equivalents中合并"
+
+  - id: "CAS-N21"
+    name: "应交税费"
+    notes: "CAS单独披露应交税费明细，HKFRS通常嵌入Taxation Note"

@@ -1,0 +1,59 @@
+你是同时持有中国 CPA 和香港 CPA 资格的资深审计师，专长是 CAS（中国企业会计准则）与 IFRS/HKFRS 的差异分析。
+
+# 任务
+
+下面是一对 A+H 股年报中的同类数据点。请判断它们之间的差异是否**符合 CAS 与 IFRS/HKFRS 之间的预期准则差异**，并给出明确的引用依据。
+
+# 输入
+
+## 数据点对
+
+| 维度 | A 股（CAS） | H 股（HKFRS/IFRS） |
+| --- | --- | --- |
+| 主题 | {topic_zh} | {topic_en} |
+| 数值 | {a_value} {a_unit} | {h_value} {h_unit} |
+| 报告期 | {a_period} | {h_period} |
+| 来源 | A 股年报 P.{a_page} | H 股年报 P.{h_page} |
+
+差异：{delta}（{delta_pct}%）
+
+## 检索到的相关准则条款
+
+{retrieved_clauses}
+
+# 输出要求
+
+严格 JSON 格式：
+
+```json
+{
+  "expected": true,
+  "rationale": "简要说明 50-150 字，必须引用准则条款编号",
+  "citations": [
+    {
+      "standard_code": "CAS 6",
+      "clause": "第 9 条",
+      "title": "无形资产 — 内部研发支出资本化条件",
+      "snippet": "企业内部研究开发项目研究阶段的支出，应当于发生时计入当期损益",
+      "source": "kb/standards/02_rnd_capitalize.md"
+    },
+    {
+      "standard_code": "IAS 38",
+      "clause": "Paragraph 57",
+      "title": "Intangible Assets — Development phase recognition",
+      "snippet": "An intangible asset arising from development shall be recognised if, and only if...",
+      "source": "kb/standards/02_rnd_capitalize.md"
+    }
+  ],
+  "confidence": 0.92
+}
+```
+
+# 判断准则
+
+- `expected = true` 仅在能用准则条款明确解释差异时给出
+- 若数值差异超出准则差异的合理范围（如研发资本化标准能解释 30% 差异，但实际差 80%），仍标 `expected = false` 并说明
+- 若数据点本应一致（如总资产、净利润），即使存在小幅口径差异，也标 `expected = false`
+- `confidence` ≥ 0.85 才会被前端展示为"AI 建议结论"，否则标为"AI 待定，需人工复核"
+- 必须给出至少 1 条 citations，且必须来自 retrieved_clauses 中已出现的条款，不得编造
+- rationale 用中文输出

@@ -1,0 +1,276 @@
+# CAS 财务报表附注标准索引
+# 依据：财政部《企业会计准则第30号——财务报表列报》应用指南及实务惯例
+# 注：A股公司附注编号通常为阿拉伯数字顺序，但具体编号和标题因公司而异
+# 以下为最常见的标准附注结构，覆盖一般工商企业
+
+standard:
+  name: "CAS 财务报表附注标准结构"
+  basis: "《企业会计准则第30号》应用指南"
+
+notes:
+  - id: "CAS-N01"
+    name: "公司基本情况"
+    category: "general"
+    common_titles:
+      - "公司基本情况"
+      - "企业基本情况"
+      - "集团简介"
+    required: true
+    content_summary: "公司注册地、组织形式、总部地址、业务性质、实际控制人"
+
+  - id: "CAS-N02"
+    name: "财务报表的编制基础"
+    category: "general"
+    common_titles:
+      - "财务报表的编制基础"
+      - "编制基础"
+    required: true
+    content_summary: "持续经营假设、会计准则依据、记账本位币、会计年度"
+
+  - id: "CAS-N03"
+    name: "遵循企业会计准则的声明"
+    category: "general"
+    common_titles:
+      - "遵循企业会计准则的声明"
+      - "符合企业会计准则的声明"
+    required: true
+
+  - id: "CAS-N04"
+    name: "重要会计政策和会计估计"
+    category: "policy"
+    common_titles:
+      - "重要会计政策及会计估计"
+      - "主要会计政策"
+      - "重要会计政策和会计估计"
+    required: true
+    content_summary: "收入确认、折旧方法、存货计价、金融工具分类、租赁等"
+
+  - id: "CAS-N05"
+    name: "会计政策和会计估计变更以及差错更正"
+    category: "policy"
+    common_titles:
+      - "会计政策和会计估计变更以及差错更正的说明"
+      - "会计政策变更"
+    required: true
+
+  - id: "CAS-N06"
+    name: "税项"
+    category: "tax"
+    common_titles:
+      - "税项"
+      - "主要税种及税率"
+      - "所得税"
+    required: true
+    content_summary: "主要税种及税率、税收优惠、递延所得税"
+
+  - id: "CAS-N07"
+    name: "企业合并及合并财务报表"
+    category: "consolidation"
+    common_titles:
+      - "企业合并及合并财务报表"
+      - "合并范围的变更"
+      - "合并财务报表"
+    required: true
+    content_summary: "子公司清单、合并范围、非控制权益"
+
+  - id: "CAS-N08"
+    name: "货币资金"
+    category: "balance_sheet"
+    common_titles:
+      - "货币资金"
+    required: true
+
+  - id: "CAS-N09"
+    name: "应收票据及应收账款"
+    category: "balance_sheet"
+    common_titles:
+      - "应收票据及应收账款"
+      - "应收账款"
+      - "应收票据"
+    required: true
+
+  - id: "CAS-N10"
+    name: "存货"
+    category: "balance_sheet"
+    common_titles:
+      - "存货"
+    required: true
+
+  - id: "CAS-N11"
+    name: "长期股权投资"
+    category: "balance_sheet"
+    common_titles:
+      - "长期股权投资"
+      - "对联营/合营企业投资"
+    required: true
+
+  - id: "CAS-N12"
+    name: "投资性房地产"
+    category: "balance_sheet"
+    common_titles:
+      - "投资性房地产"
+    required: false
+
+  - id: "CAS-N13"
+    name: "固定资产"
+    category: "balance_sheet"
+    common_titles:
+      - "固定资产"
+    required: true
+
+  - id: "CAS-N14"
+    name: "在建工程"
+    category: "balance_sheet"
+    common_titles:
+      - "在建工程"
+    required: false
+
+  - id: "CAS-N15"
+    name: "无形资产"
+    category: "balance_sheet"
+    common_titles:
+      - "无形资产"
+      - "商誉"
+    required: true
+    content_summary: "通常包含商誉和无形资产合计披露"
+
+  - id: "CAS-N16"
+    name: "商誉"
+    category: "balance_sheet"
+    common_titles:
+      - "商誉"
+      - "商誉减值测试"
+    required: false
+    content_summary: "部分公司单独披露商誉减值测试"
+
+  - id: "CAS-N17"
+    name: "递延所得税资产和负债"
+    category: "balance_sheet"
+    common_titles:
+      - "递延所得税资产和负债"
+      - "递延所得税"
+    required: true
+
+  - id: "CAS-N18"
+    name: "资产减值准备"
+    category: "balance_sheet"
+    common_titles:
+      - "资产减值准备"
+    required: true
+
+  - id: "CAS-N19"
+    name: "短期借款及长期借款"
+    category: "balance_sheet"
+    common_titles:
+      - "借款"
+      - "短期借款"
+      - "长期借款"
+    required: true
+
+  - id: "CAS-N20"
+    name: "应付职工薪酬"
+    category: "balance_sheet"
+    common_titles:
+      - "应付职工薪酬"
+    required: true
+
+  - id: "CAS-N21"
+    name: "应交税费"
+    category: "balance_sheet"
+    common_titles:
+      - "应交税费"
+    required: true
+
+  - id: "CAS-N22"
+    name: "预计负债"
+    category: "balance_sheet"
+    common_titles:
+      - "预计负债"
+    required: false
+
+  - id: "CAS-N23"
+    name: "租赁"
+    category: "balance_sheet"
+    common_titles:
+      - "租赁"
+      - "使用权资产"
+      - "租赁负债"
+    required: false
+    content_summary: "新租赁准则(CAS 21)下单独披露"
+
+  - id: "CAS-N24"
+    name: "金融工具"
+    category: "balance_sheet"
+    common_titles:
+      - "金融工具"
+      - "金融资产和金融负债"
+      - "以公允价值计量的金融工具"
+    required: true
+    content_summary: "分类、减值、公允价值层级、风险管理"
+
+  - id: "CAS-N25"
+    name: "资本公积及留存收益"
+    category: "equity"
+    common_titles:
+      - "资本公积"
+      - "留存收益"
+      - "其他综合收益"
+    required: true
+
+  - id: "CAS-N26"
+    name: "收入"
+    category: "income"
+    common_titles:
+      - "收入"
+      - "营业收入"
+      - "分部信息"
+    required: true
+    content_summary: "收入确认政策、分部报告"
+
+  - id: "CAS-N27"
+    name: "政府补助"
+    category: "income"
+    common_titles:
+      - "政府补助"
+    required: false
+
+  - id: "CAS-N28"
+    name: "股份支付"
+    category: "equity"
+    common_titles:
+      - "股份支付"
+      - "股权激励"
+    required: false
+
+  - id: "CAS-N29"
+    name: "关联方及关联交易"
+    category: "related_party"
+    common_titles:
+      - "关联方及关联交易"
+      - "关联方关系及其交易"
+    required: true
+    content_summary: "关联方清单、关联交易类型及金额、定价政策"
+
+  - id: "CAS-N30"
+    name: "或有事项"
+    category: "contingency"
+    common_titles:
+      - "或有事项"
+      - "承诺及或有事项"
+    required: true
+
+  - id: "CAS-N31"
+    name: "资产负债表日后事项"
+    category: "subsequent"
+    common_titles:
+      - "资产负债表日后事项"
+      - "期后事项"
+    required: true
+
+  - id: "CAS-N32"
+    name: "其他重要事项"
+    category: "other"
+    common_titles:
+      - "其他重要事项"
+      - "其他"
+    required: false

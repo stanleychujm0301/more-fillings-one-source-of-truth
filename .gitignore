@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量与密钥（绝不入库）
+.env
+.env.local
+*.key
+
+# 运行时存储（含客户数据，绝不入库）
+storage/
+!storage/.gitkeep
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# 临时
+*.tmp
+*.log
+*.DS_Store
+Thumbs.db
+
+# 样本（敏感，仅本地）
+samples/
+!samples/.gitkeep
+
+# 大文件
+*.pdf
+!tests/fixtures/*.pdf
+!docs/**/*.pdf

@@ -1,0 +1,261 @@
+# A+H 披露详略差异规则库（25 条）
+# 用途：供 check/disclosure.py 调用，识别两份年报在同一主题下的披露深度差异
+# 每条规则包含：主题、CAS 披露要求、IFRS/HKFRS 披露要求、差异检查逻辑
+
+version: "1.0"
+total_rules: 25
+
+rules:
+  # ==================== 现有 15 条准则差异扩展（披露维度） ====================
+
+  - rule_id: DR-01
+    topic:
+      zh: "商誉"
+      en: "Goodwill"
+    cas_requirement: "减值测试方法、CGU划分、可收回金额确定方法、关键假设（增长率、折现率）、敏感性分析"
+    ifrs_requirement: "除CAS要求外，需披露：减值测试的详细步骤、关键假设的确定依据、历史假设与实际结果对比、假设变更原因"
+    depth_diff: "HKFRS通常要求更详细的假设披露和敏感性分析，包括多个情景分析"
+    check_logic: "检查H股是否披露了CAS未要求的'假设变更原因'或'历史对比'"
+    severity: low
+
+  - rule_id: DR-02
+    topic:
+      zh: "研发支出资本化"
+      en: "R&D Capitalization"
+    cas_requirement: "资本化条件、资本化金额、摊销方法、资本化项目清单"
+    ifrs_requirement: "除CAS要求外，需披露：技术可行性评估过程、未来经济利益预期、内部使用意图的详细说明"
+    depth_diff: "HKFRS要求披露管理层判断资本化时点的具体依据"
+    check_logic: "检查H股是否披露了CAS未要求的'技术可行性评估'详细信息"
+    severity: low
+
+  - rule_id: DR-03
+    topic:
+      zh: "投资性房地产"
+      en: "Investment Property"
+    cas_requirement: "公允价值确定方法、关键参数、估值机构信息（如适用）"
+    ifrs_requirement: "除CAS要求外，需披露：Level 1/2/3 公允价值层级分类、估值技术详细描述、独立评估师资质"
+    depth_diff: "HKFRS强制要求公允价值层级披露，CAS无此强制要求"
+    check_logic: "检查H股是否披露了Level 1/2/3层级而A股未披露"
+    severity: medium
+
+  - rule_id: DR-04
+    topic:
+      zh: "政府补助"
+      en: "Government Grants"
+    cas_requirement: "补助类型（与资产/收益相关）、金额、会计处理方法"
+    ifrs_requirement: "除CAS要求外，需披露：补助的附加条件、是否存在返还风险、对现金流的影响分类"
+    depth_diff: "HKFRS要求更详细的条件披露和风险评估"
+    check_logic: "检查H股是否披露了'附加条件'和'返还风险'"
+    severity: low
+
+  - rule_id: DR-05
+    topic:
+      zh: "长期股权投资"
+      en: "Long-term Equity Investments"
+    cas_requirement: "投资对象、持股比例、核算方法、联营/合营企业主要财务信息摘要"
+    ifrs_requirement: "除CAS要求外，需披露：投资对象的详细财务信息（资产负债表和利润表主要项目）、限制条款、未确认损失的累积金额"
+    depth_diff: "HKFRS要求披露联营/合营企业的完整财务摘要，CAS可简化"
+    check_logic: "检查H股是否披露了比A股更详细的联营企业财务数据"
+    severity: medium
+
+  - rule_id: DR-06
+    topic:
+      zh: "收入确认"
+      en: "Revenue Recognition"
+    cas_requirement: "履约义务划分、时段/时点判断、合同资产/负债变动"
+    ifrs_requirement: "除CAS要求外，需披露：履约义务与合同条款的对应关系、重大融资成分判断、客户忠诚度计划的会计处理"
+    depth_diff: "HKFRS要求将收入披露与合同条款更紧密挂钩"
+    check_logic: "检查H股是否披露了'合同条款对应关系'"
+    severity: low
+
+  - rule_id: DR-07
+    topic:
+      zh: "租赁"
+      en: "Leases"
+    cas_requirement: "使用权资产和租赁负债的期初期末余额、本期增减、折旧费用、利息费用、短期租赁和低价值租赁费用"
+    ifrs_requirement: "除CAS要求外，需披露：租赁的潜在续租/终止选择权评估、可变租赁付款额、售后租回交易的详细条款"
+    depth_diff: "HKFRS要求更详细的租赁条款和选择权评估"
+    check_logic: "检查H股是否披露了'续租选择权评估'"
+    severity: low
+
+  - rule_id: DR-08
+    topic:
+      zh: "金融工具"
+      en: "Financial Instruments"
+    cas_requirement: "三分类标准、减值矩阵、风险敞口分析、公允价值确定方法"
+    ifrs_requirement: "除CAS要求外，需披露：信用风险显著增加的触发因素、前瞻性信息、ECL模型参数、转移金融资产继续涉入程度"
+    depth_diff: "HKFRS减值披露（ECL）要求显著高于CAS"
+    check_logic: "检查H股是否披露了'ECL模型参数'或'前瞻性信息'"
+    severity: medium
+
+  - rule_id: DR-09
+    topic:
+      zh: "关联方及关联交易"
+      en: "Related Party Transactions"
+    cas_requirement: "关联方清单（按性质分类）、交易类型及金额、定价政策"
+    ifrs_requirement: "除CAS要求外，需披露：关键管理人员薪酬（按姓名披露）、关联方交易对财务报表的影响分析、未结算余额的条款和条件"
+    depth_diff: "HKFRS强制要求按姓名披露董事薪酬，CAS可汇总；HKFRS要求更详细的条款披露"
+    check_logic: "检查H股是否按姓名披露董事薪酬，或是否披露了未结算余额条款"
+    severity: high
+
+  - rule_id: DR-10
+    topic:
+      zh: "同一控制下企业合并"
+      en: "Business Combinations under Common Control"
+    cas_requirement: "被合并方基本情况、合并日、账面价值、合并对价"
+    ifrs_requirement: "HKFRS无同一控制合并的专门准则，通常按购买法处理；若采用类似处理，需披露购买法下的公允价值信息"
+    depth_diff: "A股采用权益结合法，H股可能采用购买法，导致披露口径根本不同"
+    check_logic: "检查A/H是否采用了不同的合并会计方法"
+    severity: high
+
+  - rule_id: DR-11
+    topic:
+      zh: "永续债"
+      en: "Perpetual Bonds"
+    cas_requirement: "股/债分类依据、条款触发条件、利息计提政策"
+    ifrs_requirement: "除CAS要求外，需披露：金融负债与权益工具划分的详细合同条款分析、股息制动机制、利率跳升条款的影响"
+    depth_diff: "HKFRS要求更详细的合同条款分析和经济实质判断"
+    check_logic: "检查H股是否披露了'股息制动机制'或'利率跳升条款影响'"
+    severity: medium
+
+  - rule_id: DR-12
+    topic:
+      zh: "ESG披露"
+      en: "ESG Disclosures"
+    cas_requirement: "环境信息（排污、节能减排）、社会责任信息（员工、公益）、公司治理信息"
+    ifrs_requirement: "HKFRS无强制ESG准则，但HKEX《ESG Reporting Guide》要求：强制披露环境KPI（排放、能耗、用水）、社会KPI（员工伤亡、培训时长）、管治架构"
+    depth_diff: "H股ESG要求量化指标披露，A股ESG以定性描述为主"
+    check_logic: "检查H股是否披露了量化的环境KPI而A股未量化"
+    severity: medium
+
+  - rule_id: DR-13
+    topic:
+      zh: "外币折算"
+      en: "Foreign Currency Translation"
+    cas_requirement: "功能货币确定、记账本位币、汇率选择、汇兑损益"
+    ifrs_requirement: "除CAS要求外，需披露：功能货币变更的判断依据、境外经营处置时的折算差额处理、恶性通货膨胀经济的处理"
+    depth_diff: "HKFRS要求更详细的功能货币判断披露"
+    check_logic: "检查H股是否披露了'功能货币判断依据'"
+    severity: low
+
+  - rule_id: DR-14
+    topic:
+      zh: "现金流量表分类"
+      en: "Cash Flow Classification"
+    cas_requirement: "利息收付：通常经营活动；股利收付：通常经营活动"
+    ifrs_requirement: "利息收付：可经营活动或投融资活动；股利收付：可经营活动或投融资活动；需披露分类选择和政策一致性"
+    depth_diff: "HKFRS允许更灵活的分类选择，且要求披露选择理由"
+    check_logic: "检查A/H是否对利息/股利采用了不同的现金流量分类"
+    severity: medium
+
+  - rule_id: DR-15
+    topic:
+      zh: "分部报告"
+      en: "Segment Reporting"
+    cas_requirement: "业务分部（主要产品/服务）、地区分部（境内/境外）、分部收入/利润/资产"
+    ifrs_requirement: "除CAS要求外，需披露：首席运营决策者（CODM）的识别、分部利润调节至合并利润、地区分部按客户所在地划分（非注册地）、产品和劳务收入细分"
+    depth_diff: "HKFRS要求按CODM视角披露，且地区分部按客户所在地；CAS通常简化"
+    check_logic: "检查H股是否披露了'CODM识别'或按客户所在地的地区分部"
+    severity: medium
+
+  # ==================== 新增 10 条 A+H 高频披露差异 ====================
+
+  - rule_id: DR-16
+    topic:
+      zh: "股份支付"
+      en: "Share-based Payments"
+    cas_requirement: "股份支付类型、授予数量、公允价值确定方法、费用分摊"
+    ifrs_requirement: "除CAS要求外，需披露：授予条件的详细条款（市场条件/非市场条件）、 vesting period 假设变更、离职率假设、期权定价模型参数"
+    depth_diff: "HKFRS要求披露期权定价模型的详细参数（波动率、股息率等）"
+    check_logic: "检查H股是否披露了'期权定价模型参数'"
+    severity: low
+
+  - rule_id: DR-17
+    topic:
+      zh: "递延所得税"
+      en: "Deferred Tax"
+    cas_requirement: "可抵扣/应纳税暂时性差异、递延所得税资产/负债余额、税率"
+    ifrs_requirement: "除CAS要求外，需披露：未确认递延所得税资产的暂时性差异金额、税务亏损的到期日、税率变化的潜在影响"
+    depth_diff: "HKFRS要求披露未确认递延所得税资产的详细信息"
+    check_logic: "检查H股是否披露了'未确认递延所得税资产'的暂时性差异"
+    severity: low
+
+  - rule_id: DR-18
+    topic:
+      zh: "资产减值"
+      en: "Impairment of Assets"
+    cas_requirement: "减值测试方法、可收回金额、关键假设"
+    ifrs_requirement: "除CAS要求外，需披露：现金产出单元（CGU）的划分依据、商誉分摊至CGU的方法、敏感性分析（假设变动对减值的影响）"
+    depth_diff: "HKFRS要求更详细的CGU划分和敏感性分析"
+    check_logic: "检查H股是否披露了'假设变动对减值的影响'"
+    severity: medium
+
+  - rule_id: DR-19
+    topic:
+      zh: "套期会计"
+      en: "Hedge Accounting"
+    cas_requirement: "套期类型、被套期项目、套期工具、套期有效性"
+    ifrs_requirement: "除CAS要求外，需披露：风险管理策略和套期活动如何影响未来现金流、套期无效性的来源、对冲比率（hedge ratio）的来源和调整"
+    depth_diff: "HKFRS要求披露风险管理策略与未来现金流的关联"
+    check_logic: "检查H股是否披露了'风险管理策略与现金流关联'"
+    severity: low
+
+  - rule_id: DR-20
+    topic:
+      zh: "合并范围/控制判断"
+      en: "Consolidation Scope / Control Assessment"
+    cas_requirement: "子公司清单、持股比例、合并范围变更"
+    ifrs_requirement: "除CAS要求外，需披露：结构化主体（SPE/SPV）的判断依据、非控制权益的详细财务信息、潜在表决权的影响"
+    depth_diff: "HKFRS要求披露结构化主体和潜在表决权的判断"
+    check_logic: "检查H股是否披露了'结构化主体'或'潜在表决权'"
+    severity: medium
+
+  - rule_id: DR-21
+    topic:
+      zh: "董事及高管薪酬"
+      en: "Directors' and Senior Management Remuneration"
+    cas_requirement: "董事/高管薪酬总额、按类别披露（工资、奖金、股份支付）"
+    ifrs_requirement: "必须按姓名披露每位董事的薪酬明细、退休福利、离职补偿、股份挂钩薪酬的详细条款"
+    depth_diff: "HKFRS强制按姓名披露，CAS通常汇总；HKFRS要求更详细的条款"
+    check_logic: "检查H股是否按姓名披露董事薪酬"
+    severity: high
+
+  - rule_id: DR-22
+    topic:
+      zh: "或有事项与承诺"
+      en: "Contingencies and Commitments"
+    cas_requirement: "未决诉讼/仲裁、资本承诺、担保事项、金额区间"
+    ifrs_requirement: "除CAS要求外，需披露：或有事项的可能性评估（probable/possible/remote）、预期补偿的确认、承诺的时间分布"
+    depth_diff: "HKFRS要求对或有事项进行概率评估并披露"
+    check_logic: "检查H股是否对或有事项进行了'可能性评估'"
+    severity: low
+
+  - rule_id: DR-23
+    topic:
+      zh: "期后事项"
+      en: "Events After the Reporting Period"
+    cas_requirement: "调整事项、非调整事项、披露内容"
+    ifrs_requirement: "除CAS要求外，需披露：期后事项对持续经营假设的影响、股利宣告作为非调整事项的具体日期和金额"
+    depth_diff: "HKFRS要求更明确的期后股利披露"
+    check_logic: "检查H股是否将'股利宣告'作为非调整事项单独披露"
+    severity: low
+
+  - rule_id: DR-24
+    topic:
+      zh: "公允价值层级"
+      en: "Fair Value Hierarchy"
+    cas_requirement: "公允价值确定方法、估值技术、关键参数"
+    ifrs_requirement: "必须按 Level 1/2/3 分别披露：金额、估值技术、不可观察输入值（Level 3）、敏感性分析、Level 3 期初期末调节表"
+    depth_diff: "HKFRS强制Level 1/2/3分层披露，CAS无此强制要求；HKFRS要求Level 3调节表"
+    check_logic: "检查H股是否披露了Level 3期初期末调节表"
+    severity: high
+
+  - rule_id: DR-25
+    topic:
+      zh: "持续经营评估"
+      en: "Going Concern Assessment"
+    cas_requirement: "管理层对持续经营能力的评估、重大不确定性"
+    ifrs_requirement: "除CAS要求外，需披露：管理层评估的关键假设、缓解措施的可行性分析、对财务报表编制基础的影响说明"
+    depth_diff: "HKFRS要求更详细的假设和缓解措施分析"
+    check_logic: "检查H股是否披露了'缓解措施可行性分析'"
+    severity: medium
