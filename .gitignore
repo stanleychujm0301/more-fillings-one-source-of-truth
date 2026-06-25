@@ -54,3 +54,23 @@ samples/
 *.pdf
 !tests/fixtures/*.pdf
 !docs/**/*.pdf
+
+# 备份文件
+*.bak
+*.bak-*
+
+# 数据库文件
+*.db
+
+# scripts 输出产物
+scripts/*.txt
+scripts/*.json
+scripts/*.xlsx
+scripts/*.pdf
+
+# storage 根级数据文件（防漏网）
+storage/*.json
+storage/*.txt
+storage/*.xlsx
+storage/*.pdf
+storage/*.db

@@ -26,6 +26,7 @@ from ahcc.parser.pdf_a import parse_a_pdf
 from ahcc.parser.pdf_h_html import parse_h_pdf
 from ahcc.align.matcher import align_documents
 from ahcc.check.numeric import run_numeric_checks
+from ahcc.config import settings
 from ahcc.report.excel import export_excel
 from ahcc.schemas import Job, JobStatus
 
@@ -86,7 +87,7 @@ async def main() -> None:
 
     # ---------- Report ----------
     t0 = time.perf_counter()
-    out_dir = Path("./storage/jobs") / job.job_id
+    out_dir = settings.storage_dir / "jobs" / job.job_id
     out_dir.mkdir(parents=True, exist_ok=True)
     export_excel(job, out_dir / "report.xlsx")
     t_report = time.perf_counter() - t0

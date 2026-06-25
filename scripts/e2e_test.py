@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 from loguru import logger
 
+from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
 
 
@@ -83,7 +84,7 @@ async def main() -> None:
         print(f"\n  ✓ 所有差异都有 evidence")
 
     print(f"\n报告文件:")
-    report_dir = Path("./storage/jobs") / job.job_id
+    report_dir = settings.storage_dir / "jobs" / job.job_id
     for ext in ["xlsx", "pdf"]:
         path = report_dir / f"report.{ext}"
         if path.exists():

@@ -55,7 +55,7 @@ def test_static_upload_ui_collects_and_posts_company_name() -> None:
 
 
 def test_streamlit_upload_posts_company_name() -> None:
-    app = Path("ui/app.py").read_text(encoding="utf-8")
+    app = Path("archive/internal/ui-streamlit-legacy/app.py").read_text(encoding="utf-8")
 
     assert "company_name = st.text_input" in app
     assert "check_mode = st.radio" in app

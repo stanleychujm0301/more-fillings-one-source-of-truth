@@ -1,39 +1,42 @@
 # A+H Consistency Checker (AHCC)
 
-> KPMG 黑客松 China Challenge #1 — A+H 股年报数据一致性检查解决方案
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+> 跨市场年报数据一致性核查工具：自动比对 A 股与 H 股年报中的数值、披露、准则差异与图表一致性，输出带证据链的差异报告。
 >
-> **三模块设计**：底座（数值核查）+ 亮点 1（CAS↔IFRS 准则差异智能解读）+ 亮点 2（多模态图表交叉核对）
+> 本项目源于 KPMG 黑客松 China Challenge #1，现整理为开源项目供审计、投行、研究与开发者使用。
 
 ---
 
-## 1. 团队分工速查
+## 核心能力
 
-| # | 角色 | 主代码区 | 业务伙伴 |
-|---|---|---|---|
-| P1 | 技术负责人/架构 | `ahcc/schemas.py`, `ahcc/orchestrator.py`, `ahcc/api/` | — |
-| P2 | 后端 A（解析） | `ahcc/parser/` | P1 定 Schema |
-| P3 | 后端 B（规则+报告） | `ahcc/check/numeric.py`, `ahcc/check/rule_runner.py`, `ahcc/report/` | P6 写规则 |
-| P4 | AI / 算法 | `ahcc/llm/`, `ahcc/rag/`, `ahcc/vlm/`, `ahcc/check/standard.py`, `ahcc/check/chart.py` | P6 提供准则库 |
-| P5 | 前端 | `ui/` | — |
-| **P6** | **审计业务专家** | **`kb/standards/` + `rules/*.yaml`** | 全员 |
-| P7 | 业务+PM | `docs/demo_script.md`, `docs/risk_register.md`, 路演 PPT | 全员 |
+| 模块 | 说明 |
+|---|---|
+| **底座：数值核查** | 抽取 A/H 年报关键财务指标，识别数值差异与勾稽断裂 |
+| **亮点 1：准则差异解读** | 基于 CAS/IFRS 知识库进行 RAG 推理，输出准则引用与解读 |
+| **亮点 2：图表交叉核对** | 多模态比对图表与表格数据，识别图表-表格不一致 |
+
+输出格式：Excel、PDF、Word 工作底稿、PPT 路演稿。
 
 ---
 
-## 2. 快速启动
+## 快速启动
 
-### 2.1 环境准备（Python ≥ 3.10）
+### 1. 环境准备（Python ≥ 3.10）
 
 ```bash
 # 推荐使用 uv（更快）
 pip install uv
 uv sync
 
-# 或使用传统 pip
+# 或使用传统 pip（最小安装，不含 OCR/RAG 重型依赖）
 pip install -e .
+
+# 完整安装（含 paddleocr、chromadb、sentence-transformers、dashscope）
+pip install -e ".[all]"
 ```
 
-### 2.2 API Key 配置
+### 2. API Key 配置
 
 ```bash
 cp .env.example .env
@@ -44,64 +47,66 @@ cp .env.example .env
 # DEEPSEEK_API_KEY (DeepSeek)
 ```
 
-### 2.3 启动应用
+### 3. 启动应用
 
 ```bash
-# 启动后端（已包含静态 HTML 前端，端口 8000）
-uvicorn ahcc.api.main:app --reload --port 8000
+python -m uvicorn ahcc.api.main:app --reload --port 8000
 ```
 
 启动后打开浏览器访问 `http://localhost:8000/` 即可使用前端界面。
 
-> 说明：`ui/` 目录下保留了早期 Streamlit 前端代码作为历史备份，当前正式界面为 `ui/static/index.html`，由 FastAPI 直接挂载服务。
+---
 
-### 2.4 构建准则差异 RAG 库
+## 目录速览
 
-```bash
-# P6 在 kb/standards/ 填好 15 条 Markdown 后运行
-python scripts/build_kb.py
+```
+ahcc/              核心 Python 包（数据契约 / 解析 / 检查 / RAG / LLM / 报告）
+ui/static/         正式 HTML 前端（单页应用，由 FastAPI 挂载）
+archive/internal/  历史 Streamlit 前端与黑客松内部文档归档
+kb/                知识库（准则差异 15 条 + 中英术语对照 + 披露框架映射）
+rules/             YAML 规则（数值 / 勾稽 / 披露三类）
+storage/           运行时存储（默认 .gitignore，不上传）
+scripts/           构建、评估、样例生成等核心脚本
+scripts/build_kb.py           构建 ChromaDB 准则 RAG 索引
+scripts/eval_samples.py       样本评估与指标计算
+scripts/e2e_test.py           端到端流程测试
+scripts/generate_sample_report.py  生成示例 PDF/Excel 报告
+docs/              架构、演示脚本、风险登记
+tests/             单元测试
 ```
 
-### 2.5 主办方样本评估（Day 5 关键）
-
-```bash
-python scripts/eval_samples.py --pair samples/A.pdf,samples/H.pdf --answers kb/samples_answer_key.xlsx
-```
+> 说明：早期 Streamlit 前端代码（`ui/app.py`、`ui/pages/`、`ui/components/`）已归档到 `archive/internal/ui-streamlit-legacy/`。
 
 ---
 
-## 3. 关键评分指标（硬卡点）
+## 关键文档
 
-| 指标 | 目标 | Day 5 必达 |
-|---|---|---|
-| 单组样本处理时长 | < 10 分钟 | ✓ |
-| 漏检率 | ≤ 5% | ✓ |
-| 每条差异附页码证据链 | 100% | ✓ |
-| 准则差异智能解读 | ≥ 1 条带 RAG 引用 | ✓ |
-| 图表三方核对 | ≥ 1 个场景 | ✓ |
+- [CONTRIBUTING.md](CONTRIBUTING.md) — 如何贡献代码
+- [docs/architecture.md](docs/architecture.md) — 系统架构与数据流
+- [docs/demo_script.md](docs/demo_script.md) — 演示脚本
+- [docs/risk_register.md](docs/risk_register.md) — 风险登记
+- [kb/standards/00_README.md](kb/standards/00_README.md) — 准则库说明
 
 ---
 
-## 4. 目录速览
+## 主要评分指标（参考）
 
-```
-ahcc/         核心 Python 包（数据契约 / 解析 / 检查 / RAG / LLM / 报告）
-ui/static/    正式 HTML 前端（单页应用，由 FastAPI 挂载）
-ui/           历史 Streamlit 前端代码备份
-kb/           知识库（准则差异 15 条 + 中英术语对照 + 样本预期答案）
-rules/        YAML 规则（数值 / 勾稽 / 披露三类）
-storage/      运行时存储（.gitignore）
-scripts/      构建/评估脚本
-docs/         架构、演示脚本、风险登记
-tests/        单元测试
-```
+| 指标 | 目标 |
+|---|---|
+| 单组样本处理时长 | < 10 分钟 |
+| 漏检率 | ≤ 5% |
+| 每条差异附页码证据链 | 100% |
+| 准则差异智能解读 | ≥ 1 条带 RAG 引用 |
+| 图表三方核对 | ≥ 1 个场景 |
 
 ---
 
-## 5. 关键文档
+## 许可证
 
-- 实施计划：`C:\Users\Thinkpad X1\.claude\plans\challenge-1-quizzical-boole.md`
-- 架构说明：[docs/architecture.md](docs/architecture.md)
-- 演示脚本：[docs/demo_script.md](docs/demo_script.md)
-- 风险登记：[docs/risk_register.md](docs/risk_register.md)
-- 准则库说明：[kb/standards/00_README.md](kb/standards/00_README.md)
+[MIT](LICENSE)
+
+---
+
+## 历史
+
+本项目最初由 KPMG 黑客松 China Challenge #1 团队开发，解题方向为 A+H 股年报一致性检查。赛后整理为开源仓库，方便审计同行、金融机构与开发者复用与改进。

@@ -14,6 +14,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ahcc.config import settings
 from ahcc.report.excel import export_excel
 from ahcc.report.pdf import export_pdf
 from ahcc.schemas import (
@@ -207,7 +208,7 @@ def main() -> None:
         duration_seconds=222.5,
     )
 
-    out_dir = Path("storage") / "sample-reports"
+    out_dir = settings.storage_dir / "sample-reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = out_dir / "sample-report.pdf"
     xlsx_path = out_dir / "sample-report.xlsx"
