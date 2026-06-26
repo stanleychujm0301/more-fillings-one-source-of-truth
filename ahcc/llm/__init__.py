@@ -1,4 +1,4 @@
-"""LLM 调用层：统一接口 + 多 provider 路由 + 重试 + 降级到 Ollama 兜底。"""
+"""LLM 调用层：统一接口 + DeepSeek 路由 + 重试。"""
 
 from ahcc.llm.client import LLMClient, get_client
 

@@ -40,11 +40,8 @@ pip install -e ".[all]"
 
 ```bash
 cp .env.example .env
-# 填入至少一把 API Key：
-# DASHSCOPE_API_KEY (通义千问) — 主推荐
-# ZHIPUAI_API_KEY (智谱 GLM-4)
-# MOONSHOT_API_KEY (Kimi)
-# DEEPSEEK_API_KEY (DeepSeek)
+# 填入 DeepSeek API Key：
+# DEEPSEEK_API_KEY — deepseek-v4-pro
 ```
 
 ### 3. 启动应用

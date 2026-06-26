@@ -199,7 +199,7 @@ class StandardReasoning(BaseModel):
     rationale: str = Field(..., description="LLM 推理理由，必须引用准则")
     citations: list[StandardCitation] = []
     confidence: float = Field(..., ge=0.0, le=1.0)
-    llm_model: str  # 例 "glm-4-plus"
+    llm_model: str  # 例 "deepseek-v4-pro"
 
 
 class ChartCrossCheck(BaseModel):

@@ -15,6 +15,7 @@ from ahcc.report import _style as S
 from ahcc.schemas import Job
 
 _FONT_REGISTERED = False
+_FONT_MAP: dict[str, str] = {}  # weight -> 已注册字体名
 _ILLEGAL_TEXT_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
 _MAX_TABLE_ROWS = 60
 _MAX_DETAIL_CARDS = 30
@@ -91,117 +92,265 @@ def _side_labels(job: Job) -> dict[str, str]:
 
 
 def _ensure_cjk_font():
-    """注册中文字体：优先 Microsoft YaHei，回退 SimHei / STSong-Light。"""
-    global _FONT_REGISTERED
+    """注册中文字体三字重：YaHei Light / Regular / Bold，逐级回退 SimHei / STSong-Light。"""
+    global _FONT_REGISTERED, _FONT_MAP
     if _FONT_REGISTERED:
         return
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    candidates = [
-        ("YaHei", Path("C:/Windows/Fonts/msyh.ttc"), 0),
-        ("YaHei", Path("C:/Windows/Fonts/msyh.ttc"), 1),  # 某些 TTC 索引为 1
-        ("SimHei", Path("C:/Windows/Fonts/simhei.ttf"), None),
-    ]
-    for name, path, idx in candidates:
-        if not path.exists():
+    # 尝试注册三字重（msyhl/msyh/msyhbd 均为 TTC，子字体索引 0）
+    for weight in ("light", "regular", "bold"):
+        path = S.FONT_PATHS.get(weight)
+        name = S.FONT_NAMES.get(weight)
+        if not path or not path.exists():
             continue
         try:
-            if idx is not None:
-                pdfmetrics.registerFont(TTFont(name, str(path), subfontIndex=idx))
-            else:
-                pdfmetrics.registerFont(TTFont(name, str(path)))
-            _FONT_REGISTERED = True
-            logger.debug(f"PDF 字体已注册：{name} ({path})")
-            return
+            pdfmetrics.registerFont(TTFont(name, str(path), subfontIndex=0))
+            _FONT_MAP[weight] = name
+            logger.debug(f"PDF 字体已注册：{weight} → {name} ({path})")
         except Exception as exc:
-            logger.warning(f"字体注册失败 {path} idx={idx}: {exc}")
+            logger.warning(f"字体注册失败 {path}（{weight}）：{exc}")
+
+    # 缺失字重 → 回退到 regular（若有）
+    if "regular" in _FONT_MAP:
+        _FONT_MAP.setdefault("light", _FONT_MAP["regular"])
+        _FONT_MAP.setdefault("bold", _FONT_MAP["regular"])
+
+    # YaHei 全失败 → 回退 SimHei
+    if not _FONT_MAP:
+        sim_name, sim_path = S.FONT_FALLBACK_TTF
+        if sim_path.exists():
+            try:
+                pdfmetrics.registerFont(TTFont(sim_name, str(sim_path)))
+                _FONT_MAP = {"light": sim_name, "regular": sim_name, "bold": sim_name}
+            except Exception as exc:
+                logger.warning(f"SimHei 注册失败：{exc}")
 
     # 最终回退：CID 字体
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    if not _FONT_MAP:
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        pdfmetrics.registerFont(UnicodeCIDFont(S.FONT_FALLBACK_CID))
+        _FONT_MAP = {k: S.FONT_FALLBACK_CID for k in ("light", "regular", "bold")}
+
     _FONT_REGISTERED = True
 
 
-def _font_name() -> str:
-    from reportlab.pdfbase import pdfmetrics
+def _font(weight: str = "regular") -> str:
+    """按字重返回已注册字体名；缺失回退 regular → STSong-Light。"""
+    if not _FONT_REGISTERED:
+        _ensure_cjk_font()
+    return _FONT_MAP.get(weight) or _FONT_MAP.get("regular") or S.FONT_FALLBACK_CID
 
-    if "YaHei" in pdfmetrics._fonts:
-        return "YaHei"
-    if "SimHei" in pdfmetrics._fonts:
-        return "SimHei"
-    return "STSong-Light"
+
+def _ps(role: str, fn_map: dict, **overrides):
+    """按 FONT_ROLES 角色构造 reportlab ParagraphStyle。"""
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+
+    cfg = S.font_role(role)
+    params = dict(
+        name=f"role_{role}",
+        fontName=fn_map[cfg["weight"]],
+        fontSize=cfg["size"],
+        leading=cfg["leading"],
+        textColor=colors.HexColor("#" + cfg["color"]),
+    )
+    if "color" in overrides:
+        params["textColor"] = colors.HexColor("#" + overrides.pop("color"))
+    params.update(overrides)
+    return ParagraphStyle(**params)
 
 
 def export_pdf(job: Job, out_path: Path) -> None:
-    """导出 PDF 总览报告（评委友好版）。"""
-    from reportlab.lib import colors
+    """导出 PDF 总览报告（苹果风格 + 专业金融质感版）。"""
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import (
-        Paragraph,
-        SimpleDocTemplate,
-        Spacer,
-    )
+    from reportlab.platypus import PageBreak, SimpleDocTemplate, Spacer
 
     _ensure_cjk_font()
-    fn = _font_name()
-    ink = colors.HexColor("#" + S.INK)
-    ink_soft = colors.HexColor("#" + S.INK_SOFT)
-    navy = colors.HexColor("#" + S.KPMG_BLUE)
+    fn_map = {"light": _font("light"), "regular": _font("regular"), "bold": _font("bold")}
 
     styles = {
-        "title": ParagraphStyle("CJKTitle", fontName=fn, fontSize=20, leading=28, spaceAfter=2, textColor=ink),
-        "subtitle": ParagraphStyle("CJKSub", fontName=fn, fontSize=9, leading=14, spaceAfter=2, textColor=ink_soft),
-        "section": ParagraphStyle("CJKSection", fontName=fn, fontSize=12, leading=18, spaceBefore=14, spaceAfter=8, textColor=ink),
-        "normal": ParagraphStyle("CJKNormal", fontName=fn, fontSize=10, leading=16, spaceAfter=3, textColor=ink),
-        "muted": ParagraphStyle("CJKMuted", fontName=fn, fontSize=8.5, leading=12, textColor=ink_soft),
-        "header": ParagraphStyle("CJKHeader", fontName=fn, fontSize=9, leading=13, textColor=ink),
-        "cell": ParagraphStyle("CJKCell", fontName=fn, fontSize=8.5, leading=13, textColor=ink),
-        "card_label": ParagraphStyle("CJKCardL", fontName=fn, fontSize=8.5, leading=12, textColor=ink_soft),
-        "card_value": ParagraphStyle("CJKCardV", fontName=fn, fontSize=8.5, leading=12, textColor=ink),
-        "chart_title": ParagraphStyle("CJKChartTitle", fontName=fn, fontSize=10, leading=14, textColor=ink),
-        "footer": ParagraphStyle("CJKFooter", fontName=fn, fontSize=7.5, leading=10, textColor=colors.HexColor("#" + S.FOOTER_TEXT)),
+        "cover_eyebrow": _ps("cover_eyebrow", fn_map),
+        "cover_title": _ps("cover_title", fn_map),
+        "cover_subtitle": _ps("cover_subtitle", fn_map),
+        "cover_meta": _ps("cover_meta", fn_map),
+        "cover_confidential": _ps("cover_confidential", fn_map),
+        "section_eyebrow": _ps("section_eyebrow", fn_map, spaceAfter=2),
+        "section": _ps("section_title", fn_map, spaceBefore=14, spaceAfter=8),
+        "kpi_number": _ps("kpi_number", fn_map, alignment=1),
+        "kpi_alert": _ps("kpi_alert", fn_map, alignment=1),
+        "kpi_label": _ps("kpi_label", fn_map, alignment=1),
+        "title": _ps("section_title", fn_map, fontSize=18, leading=24),
+        "subtitle": _ps("cover_meta", fn_map),
+        "normal": _ps("body", fn_map, spaceAfter=3),
+        "muted": _ps("body_small", fn_map),
+        "header": _ps("table_header", fn_map),
+        "cell": _ps("table_cell", fn_map),
+        "card_label": _ps("body_small", fn_map),
+        "card_value": _ps("body_small", fn_map, color=S.INK),
+        "chart_title": _ps("section_title", fn_map, fontSize=10, leading=14),
+        "footer": _ps("footer", fn_map),
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     doc = SimpleDocTemplate(
         str(out_path), pagesize=A4,
-        topMargin=16 * mm, bottomMargin=16 * mm, leftMargin=15 * mm, rightMargin=15 * mm,
+        topMargin=18 * mm, bottomMargin=16 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
     )
 
-    story = []
-    story.extend(_build_header(job, styles, fn))
-    story.append(Spacer(1, 10))
-    story.extend(_build_dashboard(job, styles, fn))
-    story.extend(_build_charts(job, styles, fn))
-    story.append(Spacer(1, 6))
-    story.extend(_build_diff_table(job, styles, fn))
-    story.extend(_build_detail_cards(job, styles, fn))
-    story.extend(_build_coverage(job, styles, fn))
+    import tempfile
+    import shutil
 
-    doc.build(story, onFirstPage=lambda c, d: _on_page(c, d, fn), onLaterPages=lambda c, d: _on_page(c, d, fn))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ahcc_pdf_chart_"))
+    try:
+        story = []
+        # 封面由 onFirstPage 画在第一页；正文从第二页开始
+        story.append(PageBreak())
+        story.extend(_build_header(job, styles))
+        story.append(Spacer(1, 10))
+        story.extend(_build_dashboard(job, styles))
+        story.extend(_build_charts(job, styles, tmp_dir))
+        story.append(Spacer(1, 6))
+        story.extend(_build_diff_table(job, styles))
+        story.extend(_build_detail_cards(job, styles))
+        story.extend(_build_coverage(job, styles))
+
+        def _first(c, d):
+            _draw_cover_page(c, d, job)
+
+        def _later(c, d):
+            _on_page(c, d)
+
+        doc.build(story, onFirstPage=_first, onLaterPages=_later)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     logger.info(f"PDF 报告已导出：{out_path}")
 
 
-def _on_page(canvas, doc, fn: str) -> None:
+def _draw_cover_page(canvas, doc, job: Job) -> None:
+    """第一页封面：坐标精确绘制，大留白 + Light 大标题 + 海军蓝细线 + 元数据 + 保密声明。"""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
 
+    width, height = doc.pagesize
+    fn_light = _font("light")
+    fn_regular = _font("regular")
+    fn_bold = _font("bold")
+
     canvas.saveState()
-    canvas.setFont(fn, 7.5)
+
+    # 顶部字标 eyebrow
+    canvas.setFont(fn_bold, 10)
+    canvas.setFillColor(colors.HexColor("#" + S.KPMG_BLUE))
+    canvas.drawString(20 * mm, height - 26 * mm, S.WORDMARK_BRAND)
+    canvas.setFont(fn_regular, 10)
     canvas.setFillColor(colors.HexColor("#" + S.FOOTER_TEXT))
-    width = doc.pagesize[0]
-    canvas.drawString(15 * mm, 8 * mm, "KPMG · A+H Consistency Checker · 保密")
-    canvas.drawRightString(width - 15 * mm, 8 * mm, f"Page {doc.page}")
+    canvas.drawString(20 * mm + canvas.stringWidth(S.WORDMARK_BRAND, fn_bold, 10) + 6,
+                      height - 26 * mm, "·  " + S.WORDMARK_PRODUCT)
+
+    # 海军蓝细横线（标题上方）
+    y_rule = height - 120 * mm
+    canvas.setStrokeColor(colors.HexColor("#" + S.KPMG_BLUE))
+    canvas.setLineWidth(1.0)
+    canvas.line(20 * mm, y_rule, 56 * mm, y_rule)
+
+    # 大标题（Light 32，多行）
+    title = _clean_text(_report_title(job))
+    lines = _wrap_title(title)
+    canvas.setFillColor(colors.HexColor("#" + S.INK))
+    y_title = y_rule - 16 * mm
+    for i, line in enumerate(lines):
+        canvas.setFont(fn_light, 30)
+        canvas.drawString(20 * mm, y_title - i * 13 * mm, line)
+
+    # 公司名（Regular）
+    company = _clean_text(job.company_name or "—")
+    y_company = y_title - len(lines) * 13 * mm - 4 * mm
+    canvas.setFont(fn_regular, 13)
+    canvas.setFillColor(colors.HexColor("#" + S.INK_SOFT))
+    canvas.drawString(20 * mm, y_company, company)
+
+    # 元数据块
+    def _ts(dt):
+        try:
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return ""
+
+    gen_time = _ts(job.finished_at) or _ts(job.started_at) or "—"
+    dur = S.format_duration(job.duration_seconds)
+    meta_lines = [
+        ("任务编号", _clean_text(job.job_id)),
+        ("核查耗时", dur),
+        ("生成时间", gen_time),
+    ]
+    y_meta = y_company - 18 * mm
+    for label, value in meta_lines:
+        canvas.setFont(fn_regular, 9)
+        canvas.setFillColor(colors.HexColor("#" + S.NEUTRAL))
+        canvas.drawString(20 * mm, y_meta, label)
+        canvas.setFont(fn_regular, 9)
+        canvas.setFillColor(colors.HexColor("#" + S.INK_SOFT))
+        canvas.drawString(44 * mm, y_meta, value)
+        y_meta -= 6.5 * mm
+
+    # 底部保密声明 + hairline
     canvas.setStrokeColor(colors.HexColor("#" + S.HAIRLINE))
-    canvas.line(15 * mm, 11 * mm, width - 15 * mm, 11 * mm)
+    canvas.setLineWidth(0.5)
+    canvas.line(20 * mm, 22 * mm, width - 20 * mm, 22 * mm)
+    canvas.setFont(fn_light, 8)
+    canvas.setFillColor(colors.HexColor("#B0B8C4"))
+    canvas.drawString(20 * mm, 16 * mm, "本报告由系统自动生成，仅供内部核查使用；含保密信息，未经授权不得对外披露。")
     canvas.restoreState()
 
 
-def _build_header(job: Job, styles, fn):
+def _wrap_title(title: str) -> list[str]:
+    """把报告标题断成≤2 行，优先在语义分隔处断开。"""
+    if "数据一致性" in title:
+        head, _, tail = title.partition("数据一致性")
+        return [head + "数据", "一致性" + tail]
+    if "中英文报告一致性" in title:
+        head, _, tail = title.partition("中英文报告")
+        return [head + "中英文报告", tail]
+    if len(title) > 14:
+        mid = len(title) // 2
+        return [title[:mid], title[mid:]]
+    return [title]
+
+
+def _on_page(canvas, doc) -> None:
+    """内容页（第 2 页起）：顶部 running header + 底部页脚，均以 hairline 分隔。"""
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+
+    fn = _font("regular")
+    canvas.saveState()
+    width, height = doc.pagesize
+
+    # running header
+    canvas.setFont(fn, 7.5)
+    canvas.setFillColor(colors.HexColor("#" + S.FOOTER_TEXT))
+    canvas.drawString(18 * mm, height - 12 * mm, S.WORDMARK)
+    canvas.setStrokeColor(colors.HexColor("#" + S.HAIRLINE))
+    canvas.setLineWidth(0.3)
+    canvas.line(18 * mm, height - 14 * mm, width - 18 * mm, height - 14 * mm)
+
+    # footer
+    canvas.setFont(fn, 7.5)
+    canvas.setFillColor(colors.HexColor("#" + S.FOOTER_TEXT))
+    canvas.drawString(18 * mm, 8 * mm, "保密 · Confidential")
+    canvas.drawRightString(width - 18 * mm, 8 * mm, f"第 {doc.page} 页")
+    canvas.setStrokeColor(colors.HexColor("#" + S.HAIRLINE))
+    canvas.setLineWidth(0.3)
+    canvas.line(18 * mm, 11 * mm, width - 18 * mm, 11 * mm)
+    canvas.restoreState()
+
+
+def _build_header(job: Job, styles):
+    """正文首页抬头（封面之后）：字标 eyebrow + 标题 + 海军蓝细线 + 元数据。"""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, Table, TableStyle
@@ -213,58 +362,94 @@ def _build_header(job: Job, styles, fn):
             return ""
 
     gen_time = _ts(job.finished_at) or _ts(job.started_at) or "—"
-    dur = f"{job.duration_seconds:.1f} 秒" if job.duration_seconds else "—"
+    dur = S.format_duration(job.duration_seconds)
     meta = (
         f"公司：{_clean_text(job.company_name or '—')}　|　任务编号：{_clean_text(job.job_id)}　|　"
         f"核查耗时：{dur}　|　生成时间：{gen_time}"
     )
     inner = [
+        [Paragraph(S.WORDMARK, styles["cover_eyebrow"])],
         [Paragraph(_clean_text(_report_title(job)), styles["title"])],
         [Paragraph(meta, styles["subtitle"])],
     ]
-    t = Table(inner, colWidths=[180 * mm])
+    t = Table(inner, colWidths=[174 * mm])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (0, 0), 12),
-        ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
-        ("TOPPADDING", (0, 1), (-1, 1), 2),
-        ("LINEBELOW", (0, -1), (-1, -1), 0.5, colors.HexColor("#" + S.KPMG_BLUE)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (0, 0), 2),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 4),
+        ("TOPPADDING", (0, 1), (-1, 1), 0),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+        ("TOPPADDING", (0, 2), (-1, 2), 0),
+        ("LINEBELOW", (0, 1), (-1, 1), 1.2, colors.HexColor("#" + S.KPMG_BLUE)),
     ]))
     return [t]
 
 
-def _build_dashboard(job: Job, styles, fn):
+def _section_eyebrow(title: str, styles):
+    """章节眉标：bold navy eyebrow + 一条海军蓝细线，制造编辑式分区感。"""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+
+    eyebrow = Paragraph(_clean_text(title), styles["section_eyebrow"])
+    line = Table([[""]], colWidths=[174 * mm], rowHeights=[1.4])
+    line.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#" + S.KPMG_BLUE)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return [Spacer(1, 12), eyebrow, Spacer(1, 2), line, Spacer(1, 8)]
+
+
+def _build_dashboard(job: Job, styles):
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
     summary = job.comparison_summary or {}
     bilingual = getattr(job, "check_mode", "ah") == "h_bilingual"
     real_count = summary.get("real_diff_count", sum(1 for d in job.diffs if d.triage == "real"))
 
+    # (label, value, is_alert) —— oxblood 仅给「真实差异」且 > 0
     cards = [
-        ("差异总数", summary.get("total_diff_count", len(job.diffs)), S.INK, S.KPMG_BLUE),
-        ("真实差异", real_count, S.ALERT if real_count else S.INK, S.ALERT if real_count else S.KPMG_BLUE),
-        ("预期差异", summary.get("expected_diff_count", sum(1 for d in job.diffs if d.triage == "expected")), S.INK, S.KPMG_BLUE),
-        ("待判断", summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved")), S.INK, S.KPMG_BLUE),
-        ("披露覆盖", summary.get("coverage_count", len(job.coverage_items)), S.INK, S.KPMG_BLUE),
-        ("提取预警", summary.get("warning_count", 0), S.INK, S.KPMG_BLUE),
+        ("差异总数", summary.get("total_diff_count", len(job.diffs)), False),
+        ("真实差异", real_count, True),
+        ("预期差异", summary.get("expected_diff_count", sum(1 for d in job.diffs if d.triage == "expected")), False),
+        ("待判断", summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved")), False),
+        ("披露覆盖", summary.get("coverage_count", len(job.coverage_items)), False),
+        ("提取预警", summary.get("warning_count", 0), False),
     ]
 
-    def make_card(label, value, value_color, accent_color):
+    sep_style = ParagraphStyle(
+        "kpi_sep", fontName=_font("light"), fontSize=6, leading=6, alignment=1,
+        textColor=colors.HexColor("#" + S.HAIRLINE),
+    )
+
+    def make_card(label, value, is_alert):
+        alert_on = bool(is_alert and value)
+        value_style = styles["kpi_alert"] if alert_on else styles["kpi_number"]
+        accent = S.ALERT if alert_on else S.KPMG_BLUE
         return Table(
-            [[Paragraph(_clean_text(str(value)), ParagraphStyle_cardvalue_large(fn, value_color))],
-             [Paragraph(_clean_text(label), ParagraphStyle_cardcaption(fn))]],
+            [[Paragraph(_clean_text(str(value)), value_style)],
+             [Paragraph("———", sep_style)],
+             [Paragraph(_clean_text(label), styles["kpi_label"])]],
             colWidths=[52 * mm],
             style=TableStyle([
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#" + S.DASHBOARD_CARD_BG)),
-                ("LINEABOVE", (0, 0), (-1, 0), 2.0, colors.HexColor("#" + accent_color)),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#" + S.PANEL)),
+                ("LINEABOVE", (0, 0), (-1, 0), 2.0 if alert_on else 1.0, colors.HexColor("#" + accent)),
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, 0), 10),
-                ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, 0), 14),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 2),
+                ("TOPPADDING", (0, 1), (-1, 1), 0),
+                ("BOTTOMPADDING", (0, 1), (-1, 1), 2),
+                ("TOPPADDING", (0, 2), (-1, 2), 0),
+                ("BOTTOMPADDING", (0, 2), (-1, 2), 13),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
             ]),
@@ -274,15 +459,16 @@ def _build_dashboard(job: Job, styles, fn):
         [make_card(*cards[i]) for i in range(3)],
         [make_card(*cards[i]) for i in range(3, 6)],
     ]
-    grid = Table(rows, colWidths=[56 * mm] * 3, hAlign="LEFT")
+    grid = Table(rows, colWidths=[58 * mm] * 3, hAlign="LEFT")
     grid.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    out = [Paragraph("执行摘要", styles["section"]), grid]
+    out = _section_eyebrow("执行摘要 · EXECUTIVE SUMMARY", styles)
+    out.append(grid)
 
     if bilingual:
         def pct(v):
@@ -292,110 +478,64 @@ def _build_dashboard(job: Job, styles, fn):
             f"表格覆盖率 {pct(summary.get('table_coverage'))}　|　"
             f"跨币种核对一致 {summary.get('cross_currency_matched', 0)} 项"
         )
-        out.append(Spacer(1, 4))
+        out.append(Spacer(1, 6))
         out.append(Paragraph(_clean_text(bi), styles["muted"]))
     return out
 
 
-def ParagraphStyle_cardvalue_large(fn, color):
-    from reportlab.lib import colors
-    from reportlab.lib.styles import ParagraphStyle
-
-    return ParagraphStyle(
-        "cardVL", fontName=fn, fontSize=22, leading=24, alignment=1,
-        textColor=colors.HexColor("#" + color),
-    )
-
-
-def ParagraphStyle_cardcaption(fn):
-    from reportlab.lib import colors
-    from reportlab.lib.styles import ParagraphStyle
-
-    return ParagraphStyle(
-        "cardVC", fontName=fn, fontSize=9, leading=11, alignment=1,
-        textColor=colors.HexColor("#" + S.INK_SOFT),
-    )
-
-
-def _build_charts(job: Job, styles, fn):
+def _build_charts(job: Job, styles, tmp_dir: Path):
     from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image, Paragraph, Spacer, Table, TableStyle
+
+    from ahcc.report._charts import donut_png, hbar_png
 
     sev = S.severity_distribution(job.diffs)
     typ = S.type_distribution(job.diffs)
     if not sev and not typ:
-        return [Paragraph("本次核查未识别差异。", styles["muted"])]
+        out = _section_eyebrow("分布概览 · DISTRIBUTION", styles)
+        out.append(Paragraph("本次核查未识别差异。", styles["muted"]))
+        return out
 
-    drawings = []
+    def _img(png_path, target_w_mm):
+        ir = ImageReader(str(png_path))
+        iw, ih = ir.getSize()
+        w = target_w_mm * mm
+        h = w * ih / iw
+        return Image(str(png_path), width=w, height=h)
+
+    cells = []
     try:
         if sev:
-            sev_colors = ["#" + S.mono_color(i) for i in range(len(sev))]
-            drawings.append(_bar_drawing("严重度分布", sev, sev_colors, fn, styles["chart_title"]))
+            p = donut_png(sev, tmp_dir / "sev.png", title="严重度分布")
+            if p:
+                cells.append(_img(p, 82))
         if typ:
-            type_colors = ["#" + S.mono_color(i) for i in range(len(typ))]
-            drawings.append(_bar_drawing("差异类型分布", typ, type_colors, fn, styles["chart_title"]))
+            p = hbar_png(typ, tmp_dir / "typ.png", title="差异类型分布")
+            if p:
+                cells.append(_img(p, 82))
     except Exception as exc:
         logger.warning(f"PDF 分布图渲染失败：{exc}")
-        return []
+        cells = []
 
-    if not drawings:
+    if not cells:
         return []
-    row = [d for d in drawings]
-    while len(row) < 2:
-        row.append("")
-    grid = Table([row], colWidths=[90 * mm, 90 * mm], hAlign="LEFT")
+    while len(cells) < 2:
+        cells.append("")
+    grid = Table([cells], colWidths=[87 * mm, 87 * mm], hAlign="LEFT")
     grid.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-    return [Spacer(1, 4), Paragraph("分布概览", styles["section"]), grid]
+    out = _section_eyebrow("分布概览 · DISTRIBUTION", styles)
+    out.append(grid)
+    return out
 
 
-def _bar_drawing(title, dist, color_hexes, fn, title_style):
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
-    from reportlab.graphics.shapes import Drawing, String
-    from reportlab.lib.colors import HexColor
-
-    values = list(dist.values())
-    names = list(dist.keys())
-    d = Drawing(200, 150)
-    d.add(String(4, 132, _clean_text(title), fontName=title_style.fontName, fontSize=title_style.fontSize, fillColor=HexColor("#" + S.CHART_TITLE_COLOR)))
-
-    chart = VerticalBarChart()
-    chart.x = 14
-    chart.y = 20
-    chart.width = 172
-    chart.height = 96
-    chart.data = [values]
-    chart.categoryAxis.categoryNames = [_clean_text(n) for n in names]
-    chart.categoryAxis.labels.fontName = fn
-    chart.categoryAxis.labels.fontSize = 7.5
-    chart.categoryAxis.labels.dy = -2
-    chart.categoryAxis.strokeColor = None
-    chart.categoryAxis.visibleTicks = 0
-    chart.valueAxis.visible = 0
-    chart.valueAxis.valueMin = 0
-    maxv = max(values) if values else 1
-    chart.valueAxis.valueMax = maxv
-    chart.barWidth = 10
-    chart.groupSpacing = 18
-    chart.barLabels.fontName = fn
-    chart.barLabels.fontSize = 7.5
-    chart.barLabels.fillColor = HexColor("#" + S.INK_SOFT)
-    chart.barLabelFormat = "%d"
-    chart.barLabels.nudge = 8
-    chart.strokeColor = None
-    for i in range(len(values)):
-        chart.bars[(0, i)].fillColor = HexColor(color_hexes[i % len(color_hexes)])
-        chart.bars[(0, i)].strokeColor = None
-    d.add(chart)
-    return d
-
-
-def _build_diff_table(job: Job, styles, fn):
+def _build_diff_table(job: Job, styles):
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
@@ -415,27 +555,28 @@ def _build_diff_table(job: Job, styles, fn):
         data.append([
             Paragraph(_clean_text(str(d.diff_id)), styles["cell"]),
             Paragraph(_clean_text(S.diff_type_label_zh(d.diff_type)), styles["cell"]),
-            Paragraph(_clean_text(S.severity_label_zh(d.severity)), _sev_cell_style(fn, sev_key)),
-            Paragraph(_clean_text(S.triage_label_zh(d.triage)), _triage_cell_style(fn, str(getattr(d.triage, "value", d.triage)).lower())),
+            Paragraph(_clean_text(S.severity_label_zh(d.severity)), _sev_cell_style(sev_key)),
+            Paragraph(_clean_text(S.triage_label_zh(d.triage)), _triage_cell_style(str(getattr(d.triage, "value", d.triage)).lower())),
             Paragraph(_clean_text(d.topic.best()), styles["cell"]),
             Paragraph(_clean_text(_evidence_location(d)), styles["cell"]),
             Paragraph(_clean_text(_diff_explanation_text(d)[:160]), styles["cell"]),
         ])
 
-    col_widths = [14 * mm, 16 * mm, 13 * mm, 16 * mm, 30 * mm, 24 * mm, 67 * mm]
+    col_widths = [13 * mm, 16 * mm, 13 * mm, 16 * mm, 28 * mm, 23 * mm, 65 * mm]
     table = Table(data, repeatRows=1, colWidths=col_widths)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.white),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#" + S.INK)),
-        ("LINEBELOW", (0, 0), (-1, 0), 1.0, colors.HexColor("#" + S.KPMG_BLUE)),
-        ("FONTNAME", (0, 0), (-1, -1), fn),
+        ("LINEBELOW", (0, 0), (-1, 0), 1.5, colors.HexColor("#" + S.KPMG_BLUE)),
+        ("FONTNAME", (0, 0), (-1, 0), _font("bold")),
+        ("FONTNAME", (0, 1), (-1, -1), _font("regular")),
         ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("LINEBELOW", (0, 1), (-1, -1), 0.4, colors.HexColor("#" + S.HAIRLINE)),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.3, colors.HexColor("#" + S.HAIRLINE)),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + S.STRIPE)]),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
     ]
     for row_idx, sev_key in accent_rows:
         width = S.severity_border_width(sev_key)
@@ -444,34 +585,35 @@ def _build_diff_table(job: Job, styles, fn):
             style.append(("LINEBEFORE", (0, row_idx), (0, row_idx), width, colors.HexColor("#" + color)))
     table.setStyle(TableStyle(style))
 
-    out = [Paragraph("差异总览（按严重度排序）", styles["section"]), table]
+    out = _section_eyebrow("差异总览 · 按严重度排序", styles)
+    out.append(table)
     if len(sorted_diffs) > _MAX_TABLE_ROWS:
         out.append(Spacer(1, 3))
         out.append(Paragraph(f"注：另有 {len(sorted_diffs) - _MAX_TABLE_ROWS} 条差异详见 Excel 报告「差异清单」。", styles["muted"]))
     return out
 
 
-def _sev_cell_style(fn, sev_key):
+def _sev_cell_style(sev_key):
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
 
     return ParagraphStyle(
-        f"sev_{sev_key}", fontName=fn, fontSize=8, leading=11, alignment=1,
+        f"sev_{sev_key}", fontName=_font("regular"), fontSize=8, leading=11, alignment=1,
         textColor=colors.HexColor("#" + S.severity_accent(sev_key)),
     )
 
 
-def _triage_cell_style(fn, tri_key):
+def _triage_cell_style(tri_key):
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
 
     return ParagraphStyle(
-        f"tri_{tri_key}", fontName=fn, fontSize=8, leading=11, alignment=1,
+        f"tri_{tri_key}", fontName=_font("regular"), fontSize=8, leading=11, alignment=1,
         textColor=colors.HexColor("#" + S.triage_accent(tri_key)),
     )
 
 
-def _build_detail_cards(job: Job, styles, fn):
+def _build_detail_cards(job: Job, styles):
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.platypus import KeepTogether, Paragraph, Spacer, Table, TableStyle
@@ -482,14 +624,14 @@ def _build_detail_cards(job: Job, styles, fn):
         return []
 
     labels = _side_labels(job)
-    out = [Spacer(1, 6), Paragraph("重大/严重差异明细", styles["section"])]
+    out = _section_eyebrow("重大 / 严重差异明细 · KEY FINDINGS", styles)
     for d in focus[:_MAX_DETAIL_CARDS]:
         sev_key = str(getattr(d.severity, "value", d.severity)).lower()
         accent_hex = S.severity_accent(sev_key)
 
         title_row = [
-            Paragraph(_clean_text(d.topic.best()), ParagraphStyle_cardtitle(fn)),
-            Paragraph(_clean_text(S.severity_label_zh(d.severity)), _sev_cell_style(fn, sev_key)),
+            Paragraph(_clean_text(d.topic.best()), _card_title_style()),
+            Paragraph(_clean_text(S.severity_label_zh(d.severity)), _sev_cell_style(sev_key)),
         ]
         rows = [[
             Table([title_row], colWidths=[140 * mm, 22 * mm], style=TableStyle([
@@ -524,32 +666,32 @@ def _build_detail_cards(job: Job, styles, fn):
         width = S.severity_border_width(sev_key)
         card.setStyle(TableStyle([
             ("SPAN", (0, 0), (1, 0)),
-            ("FONTNAME", (0, 0), (-1, -1), fn),
+            ("FONTNAME", (0, 0), (-1, -1), _font("regular")),
             ("FONTSIZE", (0, 0), (-1, -1), 8.5),
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#" + S.PANEL)),
             ("LINEBEFORE", (0, 0), (0, -1), width, colors.HexColor("#" + accent_hex)),
             ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#" + S.HAIRLINE)),
             ("INNERGRID", (0, 1), (-1, -1), 0.3, colors.HexColor("#" + S.HAIRLINE)),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ]))
-        out.append(KeepTogether([card, Spacer(1, 6)]))
+        out.append(KeepTogether([card, Spacer(1, 8)]))
 
     if len(focus) > _MAX_DETAIL_CARDS:
         out.append(Paragraph(f"注：另有 {len(focus) - _MAX_DETAIL_CARDS} 条重大/严重差异详见 Excel 报告。", styles["muted"]))
     return out
 
 
-def ParagraphStyle_cardtitle(fn):
+def _card_title_style():
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
 
-    return ParagraphStyle("cardT", fontName=fn, fontSize=11, leading=14, textColor=colors.HexColor("#" + S.INK))
+    return ParagraphStyle("cardT", fontName=_font("bold"), fontSize=11, leading=14, textColor=colors.HexColor("#" + S.INK))
 
 
-def _build_coverage(job: Job, styles, fn):
+def _build_coverage(job: Job, styles):
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
@@ -568,19 +710,22 @@ def _build_coverage(job: Job, styles, fn):
             Paragraph(_clean_text(",".join(str(p) for p in item.h_pages) or "—"), styles["cell"]),
             Paragraph(_clean_text(item.note[:120]), styles["cell"]),
         ])
-    col_widths = [18 * mm, 18 * mm, 36 * mm, 16 * mm, 16 * mm, 76 * mm]
+    col_widths = [18 * mm, 18 * mm, 36 * mm, 16 * mm, 16 * mm, 70 * mm]
     table = Table(data, repeatRows=1, colWidths=col_widths)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.white),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#" + S.INK)),
-        ("LINEBELOW", (0, 0), (-1, 0), 1.0, colors.HexColor("#" + S.KPMG_BLUE)),
-        ("FONTNAME", (0, 0), (-1, -1), fn),
+        ("LINEBELOW", (0, 0), (-1, 0), 1.5, colors.HexColor("#" + S.KPMG_BLUE)),
+        ("FONTNAME", (0, 0), (-1, 0), _font("bold")),
+        ("FONTNAME", (0, 1), (-1, -1), _font("regular")),
         ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("LINEBELOW", (0, 1), (-1, -1), 0.4, colors.HexColor("#" + S.HAIRLINE)),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.3, colors.HexColor("#" + S.HAIRLINE)),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#" + S.STRIPE)]),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
     ]))
-    return [Spacer(1, 6), Paragraph("披露覆盖 / 未匹配项", styles["section"]), table]
+    out = _section_eyebrow("披露覆盖 / 未匹配项 · COVERAGE", styles)
+    out.append(table)
+    return out

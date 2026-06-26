@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 
 from ahcc.report.excel import export_excel
 from ahcc.report.pdf import export_pdf
+from ahcc.report import _style as S
 from ahcc.schemas import (
     Diff,
     DiffExplanation,
@@ -19,6 +20,17 @@ from ahcc.schemas import (
     LocalizedString,
     ReportSide,
 )
+
+
+def test_format_duration_renders_human_readable():
+    """核查耗时格式化：None/0 → —，<60s → 秒，>=60s → 分秒。"""
+    assert S.format_duration(None) == "—"
+    assert S.format_duration(0) == "—"
+    assert S.format_duration(-3) == "—"
+    assert S.format_duration(12.34) == "12.3 秒"
+    assert S.format_duration(59.9) == "59.9 秒"
+    assert S.format_duration(60) == "1 分 0 秒"
+    assert S.format_duration(222.5) == "3 分 42 秒"
 
 
 def _explained_diff() -> Diff:

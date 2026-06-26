@@ -3,7 +3,6 @@
 复用 ahcc.llm.client 的 cached_call 基础设施：
 - SHA-256 磁盘缓存（同图同 prompt 不重复计费）
 - tenacity 3 次指数退避重试
-- Ollama 本地兜底（若可用）
 - placeholder API key 检测自动跳过
 """
 
@@ -45,7 +44,7 @@ def extract_chart_data(image_path: str | Path) -> dict:
     """对单张图表抽取结构化数据。
 
     通过 cached_call("vlm", ...) 走 OpenAI-compatible 多模态接口，
-    自动享受磁盘缓存、指数退避重试、Ollama 兜底。
+    自动享受磁盘缓存、指数退避重试。
     任何失败（文件不存在、API 不可用、模型不支持视觉等）返回 {}。
     """
     image_path = Path(image_path)

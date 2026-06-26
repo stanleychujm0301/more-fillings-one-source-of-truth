@@ -1,10 +1,9 @@
-"""统一 LLM 客户端 — 多 provider 路由 + 重试 + Ollama 兜底。
+"""统一 LLM 客户端 — DeepSeek + 重试。
 
 设计要点：
-1. 所有国产 LLM 大多提供 OpenAI 兼容接口，统一用 openai SDK + 不同 base_url 调用
+1. 统一使用 DeepSeek API（OpenAI 兼容接口），模型 deepseek-v4-pro
 2. 通过 LLMRouter 按用途（extract / reason / vlm）路由到不同模型
-3. 失败时降级到本地 Ollama（演示当天 API 故障兜底）
-4. 内置幂等缓存：相同 prompt + 相同 seed 返回缓存结果（演示稳定性）
+3. 内置幂等缓存：相同 prompt + 相同 seed 返回缓存结果（演示稳定性）
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from openai import (
 )
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-# 仅对瞬时错误重试；认证/参数等 4xx 错误立即失败，尽快进 Ollama 兜底
+# 仅对瞬时错误重试；认证/参数等 4xx 错误立即失败
 _RETRYABLE_LLM_ERRORS = (
     APIConnectionError,
     APITimeoutError,
@@ -35,27 +34,11 @@ _RETRYABLE_LLM_ERRORS = (
 from ahcc.config import settings
 
 
-# Provider 元信息：把 OpenAI 兼容接口的 base_url 都放在这里
+# Provider 元信息 — DeepSeek
 PROVIDERS: dict[str, dict[str, str]] = {
-    "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "api_key_attr": "dashscope_api_key",
-    },
-    "zhipu": {
-        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
-        "api_key_attr": "zhipuai_api_key",
-    },
-    "moonshot": {
-        "base_url": "https://api.moonshot.cn/v1",
-        "api_key_attr": "moonshot_api_key",
-    },
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "api_key_attr": "deepseek_api_key",
-    },
-    "ollama": {
-        "base_url": settings.ollama_base_url + "/v1",
-        "api_key_attr": None,
     },
 }
 
@@ -92,8 +75,8 @@ class LLMClient:
         if provider not in PROVIDERS:
             raise ValueError(f"未知 provider: {provider}")
         cfg = PROVIDERS[provider]
-        api_key = getattr(settings, cfg["api_key_attr"], "") if cfg["api_key_attr"] else "ollama"
-        if cfg["api_key_attr"] and not api_key:
+        api_key = getattr(settings, cfg["api_key_attr"], "")
+        if not api_key:
             logger.warning(f"{provider} API Key 未配置")
         self.provider = provider
         self.model = model
@@ -196,10 +179,6 @@ class LLMRouter:
             return LLMClient(settings.vlm_provider, settings.vlm_model)
         raise ValueError(f"未知用途: {purpose}")
 
-    def fallback(self) -> LLMClient:
-        """降级到 Ollama（演示当天 API 故障）。"""
-        return LLMClient("ollama", settings.ollama_model)
-
 
 # ---------------- Module-level 单例 + 缓存 ----------------
 
@@ -213,7 +192,7 @@ def get_client(purpose: Purpose = "extract") -> LLMClient:
 def _is_placeholder_key(key: str) -> bool:
     """识别 .env 模板里的占位 key（sk-xxxx / 全 x / your-key 等），视为未配置。"""
     k = (key or "").strip()
-    if not k or k == "ollama":
+    if not k:
         return False
     low = k.lower()
     return "xxxx" in low or low in {"your-key", "placeholder", "your_api_key", "your-api-key"}
@@ -232,7 +211,6 @@ def cached_call(
 ) -> Any:
     """带磁盘缓存的调用：相同 messages 直接读缓存，演示当天 0 延迟。"""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # 先解析 client，使 cache key 纳入 provider/model：切换模型时缓存不会串号
     client = get_client(purpose)
     cache_key = hashlib.sha256(
         json.dumps(
@@ -253,11 +231,10 @@ def cached_call(
         logger.debug(f"LLM 缓存命中 {cache_key[:8]}")
         return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    # 快速失败：若 API Key 未配置或为占位符且 Ollama 不可用，直接跳过
-    # ollama 的 api_key_attr 为 None，getattr(settings, None) 会抛 TypeError，需先守卫
+    # 快速失败：若 API Key 未配置或为占位符，直接跳过
     api_key_attr = PROVIDERS[client.provider].get("api_key_attr")
-    has_key = getattr(settings, api_key_attr, "") if api_key_attr else "ollama"
-    if client.provider != "ollama" and (not has_key or _is_placeholder_key(has_key)):
+    has_key = getattr(settings, api_key_attr, "") if api_key_attr else ""
+    if not has_key or _is_placeholder_key(has_key):
         logger.warning(f"{client.provider} API Key 未配置或为占位符，跳过 LLM 调用")
         return {} if json_mode else ""
 
@@ -267,17 +244,8 @@ def cached_call(
         else:
             result = client.chat(messages, **kwargs)
     except Exception as exc:
-        logger.warning(f"主 provider 失败，切 Ollama: {exc}")
-        try:
-            client = _router.fallback()
-            if json_mode:
-                result = client.chat_json(messages, **kwargs)
-            else:
-                result = client.chat(messages, **kwargs)
-        except Exception as fallback_exc:
-            # Ollama 兜底也失败（未启动/网络不通）：永不抛异常，返回空值让上层优雅降级
-            logger.error(f"Ollama 兜底也失败，跳过本次 LLM 调用: {fallback_exc}")
-            return {} if json_mode else ""
+        logger.error(f"LLM 调用失败，跳过本次: {exc}")
+        return {} if json_mode else ""
 
     cache_file.write_text(
         json.dumps(result, ensure_ascii=False, indent=2),

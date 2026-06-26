@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 from typing import Iterable
 
 # ============================================================
@@ -48,6 +49,79 @@ HEADER_BOTTOM = "00338D"             # 表头底部海军蓝强调线
 DASHBOARD_CARD_BG = "F4F6FA"         # 仪表盘卡片背景（同 PANEL）
 CHART_TITLE_COLOR = "1A1A1A"         # 图表标题墨色
 FOOTER_TEXT = "8A93A3"               # 页脚柔和灰
+
+# ============================================================
+# 字标（排版式品牌标识，零图片依赖）
+# ============================================================
+WORDMARK = "KPMG · A+H Consistency Checker"
+WORDMARK_BRAND = "KPMG"
+WORDMARK_PRODUCT = "A+H Consistency Checker"
+
+# ============================================================
+# 中文字体路径与三字重映射（Windows 标准位置）
+# ============================================================
+FONT_PATHS = {
+    "light": Path("C:/Windows/Fonts/msyhl.ttc"),    # 微软雅黑 Light
+    "regular": Path("C:/Windows/Fonts/msyh.ttc"),   # 微软雅黑 Regular
+    "bold": Path("C:/Windows/Fonts/msyhbd.ttc"),    # 微软雅黑 Bold
+}
+# reportlab 注册名（pdf.py 用）；缺失任一字重时回退到 regular，再回退 SimHei / STSong-Light
+FONT_NAMES = {"light": "YaHeiLight", "regular": "YaHei", "bold": "YaHeiBold"}
+FONT_FALLBACK_TTF = ("SimHei", Path("C:/Windows/Fonts/simhei.ttf"))
+FONT_FALLBACK_CID = "STSong-Light"
+
+# ============================================================
+# 字体角色表 — Apple 风格层级（weight / size / color / leading）
+# weight ∈ {light, regular, bold}；color 为 6 位十六进制（不带 #）
+# PDF 侧按 weight 取已注册字体名；Excel 侧 light/regular→bold=False，bold→bold=True
+# ============================================================
+FONT_ROLES = {
+    # 封面
+    "cover_eyebrow":     {"weight": "regular", "size": 9,  "color": FOOTER_TEXT, "leading": 13},
+    "cover_title":       {"weight": "light",   "size": 32, "color": INK,         "leading": 40},
+    "cover_subtitle":    {"weight": "regular", "size": 13, "color": INK_SOFT,    "leading": 19},
+    "cover_meta":        {"weight": "regular", "size": 9,  "color": FOOTER_TEXT, "leading": 15},
+    "cover_confidential":{"weight": "light",   "size": 8,  "color": "B0B8C4",    "leading": 12},
+    # 正文层级
+    "section_eyebrow":   {"weight": "bold",    "size": 9,  "color": KPMG_BLUE,   "leading": 13},
+    "section_title":     {"weight": "bold",    "size": 14, "color": INK,         "leading": 20},
+    "kpi_number":        {"weight": "light",   "size": 28, "color": INK,         "leading": 32},
+    "kpi_alert":         {"weight": "light",   "size": 28, "color": ALERT,       "leading": 32},
+    "kpi_label":         {"weight": "regular", "size": 9,  "color": FOOTER_TEXT, "leading": 12},
+    "body":              {"weight": "regular", "size": 10, "color": INK,         "leading": 16},
+    "body_small":        {"weight": "regular", "size": 8.5,"color": INK_SOFT,    "leading": 12},
+    "table_header":      {"weight": "bold",    "size": 9,  "color": INK,         "leading": 13},
+    "table_cell":        {"weight": "regular", "size": 8.5,"color": INK,         "leading": 13},
+    "caption":           {"weight": "regular", "size": 8,  "color": NEUTRAL,     "leading": 11},
+    "footer":            {"weight": "regular", "size": 7.5,"color": FOOTER_TEXT, "leading": 10},
+}
+
+# ============================================================
+# 中性色阶 — 用于背景、分隔、图表底
+# ============================================================
+NEUTRAL_RAMP = {
+    "n50": "F8F9FB",
+    "n100": "F4F6FA",
+    "n200": "E6EAF2",
+    "n300": "D0D6E2",
+    "n400": "B0B8C4",
+    "n500": "9AA4B2",
+    "n600": "8A93A3",
+    "n700": "5A6473",
+    "n800": "3A4554",
+    "n900": "1A1A1A",
+}
+
+# 图表专用色板（克制、专业）— 取自 MONO_RAMP 海军蓝阶
+CHART_PALETTE = {
+    "primary": MONO_RAMP[0],     # 00338D
+    "secondary": MONO_RAMP[2],   # 4A6FA5
+    "tertiary": MONO_RAMP[3],    # 7C97BE
+    "quaternary": MONO_RAMP[4],  # AFC0D9
+    "bg": PANEL,                 # F4F6FA
+    "label": FOOTER_TEXT,        # 8A93A3 数值标签
+    "grid": HAIRLINE,            # E6EAF2 网格/基线
+}
 
 # 严重度 / 分流的「强调色」——取代整列实色填充，仅用于文字着色 / 细色条
 SEVERITY_ACCENT = {
@@ -250,3 +324,54 @@ def standard_citation_text(diff) -> str:
         if line:
             lines.append(line)
     return "\n".join(lines)
+
+
+# ============================================================
+# 字体角色 / 图表色 助手（Apple + 金融风格升级）
+# ============================================================
+def font_role(role: str) -> dict:
+    """返回指定角色的字体配置（weight/size/color/leading）；未知角色回退 body。"""
+    return FONT_ROLES.get(role, FONT_ROLES["body"])
+
+
+def excel_font(role: str, **overrides) -> dict:
+    """返回 openpyxl Font(**kwargs) 的构造参数。
+
+    Excel 无 light 字重，light/regular → bold=False，bold → bold=True；
+    传入 overrides 可覆盖 size/color/bold 等。
+    """
+    cfg = font_role(role)
+    params = {
+        "name": FONT_FAMILY,
+        "size": cfg["size"],
+        "bold": cfg["weight"] == "bold",
+        "color": cfg["color"],
+    }
+    params.update(overrides)
+    return params
+
+
+def chart_color(index: int) -> str:
+    """按索引取图表色（海军蓝单色阶，循环）。"""
+    return mono_color(index)
+
+
+def format_duration(seconds) -> str:
+    """把核查耗时（秒）格式化为更专业的可读串。
+
+    None / <=0 → "—"；< 60s → "12.3 秒"；>= 60s → "3 分 42 秒"（整秒）。
+    """
+    if seconds is None:
+        return "—"
+    try:
+        total = float(seconds)
+    except (TypeError, ValueError):
+        return "—"
+    if total <= 0:
+        return "—"
+    if total < 60:
+        return f"{total:.1f} 秒"
+    minutes, secs = divmod(int(round(total)), 60)
+    return f"{minutes} 分 {secs} 秒"
+
+

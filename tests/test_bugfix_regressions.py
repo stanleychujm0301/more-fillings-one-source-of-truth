@@ -5,7 +5,6 @@
 - run_chart_checks 预算只计入有图像的图表
 - pdf_a 权益表 section code 无前导空格
 - numeric._CORE_KEYS 同时包含 equity 与 total_equity
-- llm.cached_call 在 ollama provider 下不因 getattr(settings, None) 崩溃
 """
 
 from __future__ import annotations
@@ -115,20 +114,3 @@ def test_core_keys_contain_both_equity_variants() -> None:
     assert "total_equity" in numeric_module._CORE_KEYS
 
 
-def test_cached_call_ollama_provider_does_not_crash(monkeypatch, tmp_path) -> None:
-    """P0-5：provider 为 ollama 时 cached_call 不应因 getattr(settings, None) 抛 TypeError。"""
-    from ahcc.llm import client as client_module
-
-    class _FakeOllama:
-        provider = "ollama"
-        model = "qwen2.5"
-
-        def chat_json(self, messages, **kwargs):
-            return {"ok": True}
-
-    monkeypatch.setattr(client_module, "_CACHE_DIR", tmp_path / "llm_cache")
-    monkeypatch.setattr(client_module, "get_client", lambda purpose="extract": _FakeOllama())
-
-    result = client_module.cached_call("reason", [{"role": "user", "content": "hi"}], json_mode=True)
-
-    assert result == {"ok": True}

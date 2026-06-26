@@ -240,12 +240,19 @@ def export_excel(job: Job, out_path: Path) -> None:
     _write_evidence_sheet(ws_ev, job.diffs)
 
     # 总览 sheet 放最前；但保持「差异清单」为 active（现有测试依赖 wb.active）
-    ws_overview = wb.create_sheet("核查总览", 0)
-    _write_overview_sheet(ws_overview, job)
-    wb.active = wb.index(ws)
+    import shutil
+    import tempfile
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out_path)
+    chart_dir = Path(tempfile.mkdtemp(prefix="ahcc_xlsx_chart_"))
+    try:
+        ws_overview = wb.create_sheet("核查总览", 0)
+        _write_overview_sheet(ws_overview, job, chart_dir)
+        wb.active = wb.index(ws)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(out_path)
+    finally:
+        shutil.rmtree(chart_dir, ignore_errors=True)
     logger.info(f"Excel 报告已导出：{out_path}")
 
 
@@ -368,32 +375,155 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
 # ============================================================
 # 核查总览
 # ============================================================
-def _write_overview_sheet(ws, job: Job) -> None:
-    from openpyxl.chart import BarChart, Reference
+def _premium_title_block(ws, row: int, title: str, subtitle: str = "") -> int:
+    """premium 标题块：eyebrow 字标 + 大标题 + 副标题 + 海军蓝细线。返回下一行号。"""
+    from openpyxl.styles import Alignment, Border, Font, Side
+
+    span_last = "H"
+
+    # eyebrow 字标
+    ws.merge_cells(f"A{row}:{span_last}{row}")
+    c = ws.cell(row=row, column=1, value=S.WORDMARK)
+    c.font = Font(name=_BODY_FONT, size=8.5, color=S.FOOTER_TEXT)
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[row].height = 18
+    row += 1
+
+    # 大标题
+    ws.merge_cells(f"A{row}:{span_last}{row}")
+    c = ws.cell(row=row, column=1, value=title)
+    c.font = Font(name=_BODY_FONT, size=18, bold=False, color=S.INK)
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[row].height = 34
+    row += 1
+
+    # 副标题（公司名）
+    if subtitle:
+        ws.merge_cells(f"A{row}:{span_last}{row}")
+        c = ws.cell(row=row, column=1, value=subtitle)
+        c.font = Font(name=_BODY_FONT, size=11, color=S.INK_SOFT)
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+    # 海军蓝细线
+    navy = Side(style="thin", color=S.KPMG_BLUE)
+    for col in range(1, 9):
+        ws.cell(row=row, column=col).border = Border(bottom=navy)
+    ws.row_dimensions[row].height = 4
+    return row + 1
+
+
+def _write_kpi_cards(ws, start_row: int, metrics: list[tuple]) -> int:
+    """合并单元格 KPI 卡片：2 行 × 3 列；每卡 = 标签 / 大数字 / 说明 + 顶部 accent。
+
+    metrics: list of (label, value, note, is_alert)。返回下一可用行号。
+    """
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
+
+    panel = PatternFill(start_color=S.PANEL, end_color=S.PANEL, fill_type="solid")
+    # 三张卡片三等分 A:C / D:F / G:I
+    col_groups = [(1, 3), (4, 6), (7, 9)]
+
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    rows_per_card = 3
+    gap_rows = 1
+
+    for grp in range(2):  # 两行卡片
+        base = start_row + grp * (rows_per_card + gap_rows)
+        for ci, (sc, ec) in enumerate(col_groups):
+            idx = grp * 3 + ci
+            if idx >= len(metrics):
+                break
+            label, value, note, is_alert = metrics[idx]
+            alert_on = bool(is_alert and value)
+            accent = S.ALERT if alert_on else S.KPMG_BLUE
+
+            # 三行：标签 / 数字 / 说明
+            for dr in range(rows_per_card):
+                ws.merge_cells(start_row=base + dr, start_column=sc, end_row=base + dr, end_column=ec)
+                for col in range(sc, ec + 1):
+                    ws.cell(row=base + dr, column=col).fill = panel
+
+            lcell = ws.cell(row=base, column=sc, value=label)
+            lcell.font = Font(name=_BODY_FONT, size=9, color=S.FOOTER_TEXT)
+            lcell.alignment = center
+            vcell = ws.cell(row=base + 1, column=sc, value=value)
+            vcell.font = Font(name=_BODY_FONT, size=22, bold=False, color=S.ALERT if alert_on else S.INK)
+            vcell.alignment = center
+            ncell = ws.cell(row=base + 2, column=sc, value=note)
+            ncell.font = Font(name=_BODY_FONT, size=8, color=S.FOOTER_TEXT)
+            ncell.alignment = center
+
+            # 顶部 accent line
+            top = Side(style="medium" if alert_on else "thin", color=accent)
+            for col in range(sc, ec + 1):
+                cur = ws.cell(row=base, column=col)
+                cur.border = Border(top=top)
+
+            ws.row_dimensions[base].height = 16
+            ws.row_dimensions[base + 1].height = 30
+            ws.row_dimensions[base + 2].height = 16
+        if grp == 0:
+            ws.row_dimensions[base + rows_per_card].height = 8
+
+    return start_row + 2 * (rows_per_card + gap_rows)
+
+
+def _embed_distribution_charts(ws, job: Job, chart_dir: Path, anchor_row: int) -> bool:
+    """渲染严重度/类型分布为 PNG 并嵌入；成功返回 True，失败 False（调用方回退原生图）。"""
+    from openpyxl.drawing.image import Image as XLImage
+
+    from ahcc.report._charts import donut_png, hbar_png
+
+    sev = S.severity_distribution(job.diffs)
+    typ = S.type_distribution(job.diffs)
+    if not sev and not typ:
+        return True  # 无差异：无需图表，视为完成
+
+    embedded = False
+    try:
+        if sev:
+            p = donut_png(sev, chart_dir / "sev.png", title="严重度分布")
+            if p:
+                img = XLImage(str(p))
+                ratio = 360 / float(img.width)
+                img.width = 360
+                img.height = int(img.height * ratio)
+                ws.add_image(img, f"A{anchor_row}")
+                embedded = True
+        if typ:
+            p = hbar_png(typ, chart_dir / "typ.png", title="差异类型分布")
+            if p:
+                img = XLImage(str(p))
+                ratio = 360 / float(img.width)
+                img.width = 360
+                img.height = int(img.height * ratio)
+                ws.add_image(img, f"F{anchor_row}")
+                embedded = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Excel 分布图嵌入失败，将回退原生图表：{exc}")
+        return False
+    return embedded
+
+
+def _write_overview_sheet(ws, job: Job, chart_dir: Path | None = None) -> None:
+    from openpyxl.styles import Alignment, Font
 
     summary = job.comparison_summary or {}
     bilingual = getattr(job, "check_mode", "ah") == "h_bilingual"
     title = "H 股中英文报告一致性核查报告" if bilingual else "A+H 股年报数据一致性核查报告"
+    company = job.company_name or "—"
 
-    # 列宽：A 标签 / B 数值 / C 说明
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 18
-    ws.column_dimensions["C"].width = 40
-    for col in ("E", "F", "G"):
-        ws.column_dimensions[col].width = 16
+    # 列宽：三等分卡片 + 适度留白
+    for col, w in (("A", 13), ("B", 13), ("C", 13), ("D", 13), ("E", 13),
+                   ("F", 13), ("G", 13), ("H", 13), ("I", 13)):
+        ws.column_dimensions[col].width = w
 
-    # 标题条（合并 A1:C1）
-    ws.merge_cells("A1:C1")
-    tcell = ws["A1"]
-    tcell.value = title
-    tcell.font = Font(name=_BODY_FONT, size=16, bold=True, color=S.INK)
-    tcell.fill = PatternFill(start_color=S.HEADER_BG, end_color=S.HEADER_BG, fill_type="solid")
-    tcell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    tcell.border = Border(bottom=Side(style="thin", color=S.HEADER_BOTTOM))
-    ws.row_dimensions[1].height = 36
+    # —— premium 标题块 ——
+    row = _premium_title_block(ws, 1, title, company)
 
+    # —— 元数据 ——
     def _ts(dt):
         try:
             return dt.strftime("%Y-%m-%d %H:%M")
@@ -401,55 +531,32 @@ def _write_overview_sheet(ws, job: Job) -> None:
             return ""
 
     gen_time = _ts(job.finished_at) or _ts(job.started_at)
-    dur = f"{job.duration_seconds:.1f} 秒" if job.duration_seconds else "—"
+    dur = S.format_duration(job.duration_seconds)
     meta_rows = [
-        ("公司名称", job.company_name or "—"),
         ("任务编号", job.job_id),
         ("核查模式", summary.get("mode_label", "H 股中英文检查" if bilingual else "A+H 股报告检查")),
         ("核查耗时", dur),
         ("生成时间", gen_time or "—"),
     ]
-    row = 2
-    label_font = Font(name=_BODY_FONT, size=10, bold=True, color=S.INK_SOFT)
-    value_font = Font(name=_BODY_FONT, size=10, color=S.INK)
+    label_font = Font(name=_BODY_FONT, size=9, color=S.FOOTER_TEXT)
+    value_font = Font(name=_BODY_FONT, size=9, color=S.INK)
     for label, value in meta_rows:
         ws.cell(row=row, column=1, value=label).font = label_font
         ws.cell(row=row, column=2, value=_clean_cell(str(value))).font = value_font
+        ws.row_dimensions[row].height = 16
         row += 1
 
-    # —— 关键指标区 ——
-    row += 1
-    _section_header(ws, row, "关键指标", span=3)
+    # —— KPI 卡片 ——
     row += 1
     metrics = [
-        ("差异总数", summary.get("total_diff_count", len(job.diffs)), "本次识别的全部差异条数"),
-        ("真实差异", summary.get("real_diff_count", sum(1 for d in job.diffs if d.triage == "real")), "需重点关注/追问的差异"),
-        ("预期差异", summary.get("expected_diff_count", sum(1 for d in job.diffs if d.triage == "expected")), "CAS↔IFRS 趋同等可解释差异"),
-        ("待判断", summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved")), "需人工进一步确认"),
-        ("披露覆盖项", summary.get("coverage_count", len(job.coverage_items)), "披露范围匹配/单边项总数"),
-        (f"{'中文' if bilingual else 'A'}事实数", summary.get("a_fact_count", 0), "抽取到的指标出现次数"),
-        (f"{'英文' if bilingual else 'H'}事实数", summary.get("h_fact_count", 0), "抽取到的指标出现次数"),
-        ("提取预警", summary.get("warning_count", 0), f"阻断 {summary.get('blocking_warning_count', 0)} / 辅助 {summary.get('aux_warning_count', 0)}"),
+        ("差异总数", summary.get("total_diff_count", len(job.diffs)), "全部差异条数", False),
+        ("真实差异", summary.get("real_diff_count", sum(1 for d in job.diffs if d.triage == "real")), "需重点关注", True),
+        ("预期差异", summary.get("expected_diff_count", sum(1 for d in job.diffs if d.triage == "expected")), "可解释差异", False),
+        ("待判断", summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved")), "需人工确认", False),
+        ("披露覆盖", summary.get("coverage_count", len(job.coverage_items)), "匹配 / 单边项", False),
+        ("提取预警", summary.get("warning_count", 0), f"阻断 {summary.get('blocking_warning_count', 0)} / 辅助 {summary.get('aux_warning_count', 0)}", False),
     ]
-
-    panel_fill = PatternFill(start_color=S.DASHBOARD_CARD_BG, end_color=S.DASHBOARD_CARD_BG, fill_type="solid")
-    label_font = Font(name=_BODY_FONT, size=9, color=S.INK_SOFT)
-    note_font = Font(name=_BODY_FONT, size=9, color=S.INK_SOFT)
-    for i, (label, value, note) in enumerate(metrics):
-        r = row + i
-        lcell = ws.cell(row=r, column=1, value=label)
-        lcell.font = label_font
-        lcell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-        vcell = ws.cell(row=r, column=2, value=value)
-        value_color = S.ALERT if label == "真实差异" and value else S.INK
-        vcell.font = Font(name=_BODY_FONT, size=14, bold=True, color=value_color)
-        vcell.alignment = Alignment(horizontal="center", vertical="center")
-        ncell = ws.cell(row=r, column=3, value=_clean_cell(str(note)))
-        ncell.font = note_font
-        ncell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-        for col in range(1, 4):
-            ws.cell(row=r, column=col).fill = panel_fill
-    row += len(metrics)
+    row = _write_kpi_cards(ws, row, metrics)
 
     # 双语模式补充指标
     if bilingual:
@@ -479,17 +586,34 @@ def _write_overview_sheet(ws, job: Job) -> None:
             ws.cell(row=row, column=3, value=_clean_cell(str(note))).font = Font(name=_BODY_FONT, size=9, color=S.TEXT_MUTED)
             row += 1
 
-    # —— 分布图数据区（写到 E/F 列，绑定图表） ——
+    # —— 分布图 ——
+    row += 2
+    _section_header(ws, row, "分布概览", span=9)
+    row += 2
+    embedded = False
+    if chart_dir is not None:
+        embedded = _embed_distribution_charts(ws, job, chart_dir, row)
+    if not embedded:
+        _write_native_charts(ws, job, row)
+
+
+def _write_native_charts(ws, job: Job, anchor_row: int) -> None:
+    """回退：openpyxl 原生 BarChart（仅当 PNG 渲染不可用时）。"""
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.styles import Font
+
     sev_dist = S.severity_distribution(job.diffs)
     type_dist = S.type_distribution(job.diffs)
 
-    data_top = 2
-    ws.cell(row=data_top, column=5, value="严重度").font = Font(name=_BODY_FONT, bold=True)
-    ws.cell(row=data_top, column=6, value="数量").font = Font(name=_BODY_FONT, bold=True)
+    data_top = anchor_row
+    # 数据写到远右列（L/M），避免与版面冲突
+    sev_col, cnt_col = 12, 13
+    ws.cell(row=data_top, column=sev_col, value="严重度").font = Font(name=_BODY_FONT, bold=True)
+    ws.cell(row=data_top, column=cnt_col, value="数量").font = Font(name=_BODY_FONT, bold=True)
     r = data_top + 1
     for label, count in (sev_dist or {"（无差异）": 0}).items():
-        ws.cell(row=r, column=5, value=label)
-        ws.cell(row=r, column=6, value=count)
+        ws.cell(row=r, column=sev_col, value=label)
+        ws.cell(row=r, column=cnt_col, value=count)
         r += 1
     sev_last = r - 1
 
@@ -497,23 +621,23 @@ def _write_overview_sheet(ws, job: Job) -> None:
         chart = BarChart()
         chart.type = "col"
         chart.title = "严重度分布"
-        chart.height = 9
-        chart.width = 14
+        chart.height = 8
+        chart.width = 13
         chart.legend = None
-        data = Reference(ws, min_col=6, min_row=data_top, max_row=sev_last)
-        cats = Reference(ws, min_col=5, min_row=data_top + 1, max_row=sev_last)
+        data = Reference(ws, min_col=cnt_col, min_row=data_top, max_row=sev_last)
+        cats = Reference(ws, min_col=sev_col, min_row=data_top + 1, max_row=sev_last)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
         _style_mono_chart(chart, sev_last - data_top)
-        ws.add_chart(chart, "A" + str(row + 2))
+        ws.add_chart(chart, f"A{anchor_row}")
 
     type_top = sev_last + 3
-    ws.cell(row=type_top, column=5, value="差异类型").font = Font(name=_BODY_FONT, bold=True)
-    ws.cell(row=type_top, column=6, value="数量").font = Font(name=_BODY_FONT, bold=True)
+    ws.cell(row=type_top, column=sev_col, value="差异类型").font = Font(name=_BODY_FONT, bold=True)
+    ws.cell(row=type_top, column=cnt_col, value="数量").font = Font(name=_BODY_FONT, bold=True)
     r = type_top + 1
     for label, count in (type_dist or {"（无差异）": 0}).items():
-        ws.cell(row=r, column=5, value=label)
-        ws.cell(row=r, column=6, value=count)
+        ws.cell(row=r, column=sev_col, value=label)
+        ws.cell(row=r, column=cnt_col, value=count)
         r += 1
     type_last = r - 1
 
@@ -521,15 +645,15 @@ def _write_overview_sheet(ws, job: Job) -> None:
         chart2 = BarChart()
         chart2.type = "bar"
         chart2.title = "差异类型分布"
-        chart2.height = 9
-        chart2.width = 14
+        chart2.height = 8
+        chart2.width = 13
         chart2.legend = None
-        data2 = Reference(ws, min_col=6, min_row=type_top, max_row=type_last)
-        cats2 = Reference(ws, min_col=5, min_row=type_top + 1, max_row=type_last)
+        data2 = Reference(ws, min_col=cnt_col, min_row=type_top, max_row=type_last)
+        cats2 = Reference(ws, min_col=sev_col, min_row=type_top + 1, max_row=type_last)
         chart2.add_data(data2, titles_from_data=True)
         chart2.set_categories(cats2)
         _style_mono_chart(chart2, type_last - type_top)
-        ws.add_chart(chart2, "A" + str(row + 20))
+        ws.add_chart(chart2, f"F{anchor_row}")
 
 
 def _style_mono_chart(chart, n_points: int) -> None:

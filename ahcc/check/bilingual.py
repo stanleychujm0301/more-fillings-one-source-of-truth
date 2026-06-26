@@ -2984,7 +2984,10 @@ def _fact_diffs(
         # ── 低置信度段落对（<0.85）：正则路径极易跨子事项错配，直接跳过 ──
         # LLM 路径不受影响（LLM 有 STEP 0 翻译验证），真实差异不会漏报
         pair_confidence = pair.get("alignment_confidence", 0.5)
-        if pair_confidence < 0.85:
+        # Keep the low-confidence guard for likely cross-event pairings, but
+        # allow regex checks when the pair has shared entities.
+        has_shared = pair.get("_has_shared_entities", False)
+        if pair_confidence < 0.85 and not has_shared:
             fact_stats["low_confidence_skipped"] = fact_stats.get("low_confidence_skipped", 0) + 1
             continue
 
@@ -3002,9 +3005,6 @@ def _fact_diffs(
             or (zh_total_facts >= 3 and en_total_facts >= 2)
             or (en_total_facts >= 3 and zh_total_facts >= 2)
         )
-        # 段落对是否有共享实体（从 _legacy_pairs_from_alignments 传入）
-        has_shared = pair.get("_has_shared_entities", False)
-
         zh_by_role = _facts_by_role(zh_facts)
         en_by_role = _facts_by_role(en_facts)
         for key in sorted(set(zh_by_role) & set(en_by_role)):

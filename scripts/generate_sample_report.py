@@ -116,6 +116,45 @@ def _make_diffs() -> list[Diff]:
                 Evidence(side=ReportSide.A_SHARE, page=12, snippet="图表：营收增长 8%"),
             ],
         ),
+        Diff(
+            diff_id="D-006",
+            diff_type=DiffType.NUMERIC,
+            severity=DiffSeverity.HIGH,
+            triage="real",
+            topic=LocalizedString(zh="归母净利润", en="Net profit attributable"),
+            summary=LocalizedString(zh="归母净利润 A/H 列示口径不一致", en="Net profit mismatch"),
+            a_value=82_000_000_000.0,
+            h_value=80_500_000_000.0,
+            delta=-1_500_000_000.0,
+            evidence=[
+                Evidence(side=ReportSide.A_SHARE, page=121, snippet="归母净利润 820 亿"),
+                Evidence(side=ReportSide.H_SHARE, page=119, snippet="Profit attributable 805 亿"),
+            ],
+        ),
+        Diff(
+            diff_id="D-007",
+            diff_type=DiffType.DISCLOSURE,
+            severity=DiffSeverity.MEDIUM,
+            triage="expected",
+            topic=LocalizedString(zh="关联交易披露", en="Related party disclosure"),
+            summary=LocalizedString(zh="关联交易披露详略程度存在可解释差异", en="Related party disclosure depth"),
+            evidence=[
+                Evidence(side=ReportSide.A_SHARE, page=188, snippet="关联交易明细 12 项"),
+                Evidence(side=ReportSide.H_SHARE, page=184, snippet="Related party transactions summarized"),
+            ],
+        ),
+        Diff(
+            diff_id="D-008",
+            diff_type=DiffType.CROSS_CHECK,
+            severity=DiffSeverity.LOW,
+            triage="unresolved",
+            topic=LocalizedString(zh="现金流量表勾稽", en="Cash flow cross check"),
+            summary=LocalizedString(zh="期末现金及现金等价物与资产负债表存在小额差异", en="Cash reconciliation"),
+            evidence=[
+                Evidence(side=ReportSide.A_SHARE, page=52, snippet="期末现金 130 亿"),
+                Evidence(side=ReportSide.H_SHARE, page=50, snippet="Cash at end 129.8 亿"),
+            ],
+        ),
     ]
 
 
@@ -194,10 +233,10 @@ def main() -> None:
         profile_a=_make_profile("A"),
         profile_h=_make_profile("H"),
         comparison_summary={
-            "total_diff_count": 5,
-            "real_diff_count": 2,
-            "expected_diff_count": 2,
-            "unresolved_diff_count": 1,
+            "total_diff_count": 8,
+            "real_diff_count": 3,
+            "expected_diff_count": 3,
+            "unresolved_diff_count": 2,
             "coverage_count": 2,
             "warning_count": 0,
             "a_fact_count": 48,

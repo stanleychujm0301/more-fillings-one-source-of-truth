@@ -111,14 +111,15 @@ class Orchestrator:
             job.diffs = [*numeric_diffs, *standard_diffs, *disclosure_diffs, *event_diffs, *chart_diffs]
 
             # ---------- 阶段 4：报告 ----------
+            # 先结算汇总与耗时，再生成报告 —— 确保报告内「核查耗时/生成时间/提取预警」取到真实值
             self._emit(job, JobStatus.REPORTING, 95, "生成报告")
-            await self._safe_check(self._build_report(job), job, "报告生成", None, module_warnings, 98)
-
             job.comparison_summary = self._build_comparison_summary(job, profile_a, profile_h, module_warnings=module_warnings)
-
-            job.status = JobStatus.DONE
             job.finished_at = datetime.utcnow()
             job.duration_seconds = (job.finished_at - job.started_at).total_seconds()
+
+            await self._safe_check(self._build_report(job), job, "报告生成", None, module_warnings, 98)
+
+            job.status = JobStatus.DONE
             self._emit(job, JobStatus.DONE, 100, f"完成，识别 {len(job.diffs)} 条差异")
             return job
 
@@ -186,10 +187,7 @@ class Orchestrator:
         job.coverage_items = self._normalize_bilingual_coverage_items(result.coverage_items)
 
         self._emit(job, JobStatus.REPORTING, 95, "生成英文翻译核对报告")
-        started = time.perf_counter()
-        await self._safe_check(self._build_report(job), job, "报告生成", None, module_warnings, 98)
-        phase_timings["report_seconds"] = round(time.perf_counter() - started, 4)
-
+        # 先结算汇总与耗时，再生成报告；report_seconds 经 phase_timings 引用在报告后回填
         job.comparison_summary = self._build_bilingual_summary(
             job,
             doc_zh,
@@ -199,10 +197,14 @@ class Orchestrator:
             phase_timings=phase_timings,
             module_warnings=module_warnings,
         )
-
-        job.status = JobStatus.DONE
         job.finished_at = datetime.utcnow()
         job.duration_seconds = (job.finished_at - job.started_at).total_seconds()
+
+        started = time.perf_counter()
+        await self._safe_check(self._build_report(job), job, "报告生成", None, module_warnings, 98)
+        phase_timings["report_seconds"] = round(time.perf_counter() - started, 4)
+
+        job.status = JobStatus.DONE
         self._emit(job, JobStatus.DONE, 100, f"完成，识别 {len(job.diffs)} 条英文翻译问题")
         return job
 

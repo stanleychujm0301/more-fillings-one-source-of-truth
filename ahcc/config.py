@@ -11,10 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # API Keys
-    dashscope_api_key: str = ""
-    zhipuai_api_key: str = ""
-    moonshot_api_key: str = ""
+    # API Key — DeepSeek (deepseek-v4-pro)
     deepseek_api_key: str = ""
 
     # 模型路由
@@ -24,10 +21,6 @@ class Settings(BaseSettings):
     llm_reason_model: str = "deepseek-v4-pro"
     vlm_provider: str = "deepseek"
     vlm_model: str = "deepseek-v4-pro"
-
-    # Ollama 兜底
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:14b"
 
     # 应用
     app_env: str = "dev"
