@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from ahcc.api import main as api_main
+from ahcc.api import routes_job
+
+
+@pytest.fixture
+def workspace_tmp():
+    path = Path("storage") / "test-artifacts" / f"report-download-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _patch_report_job(monkeypatch, workspace_tmp: Path, job_id: str = "j-download") -> Path:
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(routes_job.settings, "storage_dir", workspace_tmp)
+    monkeypatch.setattr(
+        routes_job,
+        "get_job",
+        lambda requested_job_id: {
+            "job_id": requested_job_id,
+            "company_name": "Downloaded Project",
+            "check_mode": "ah",
+            "a_file": "a.pdf",
+            "h_file": "h.pdf",
+            "status": "done",
+            "coverage_items": [],
+            "comparison_summary": {"result_version": 11},
+        }
+        if requested_job_id == job_id
+        else None,
+    )
+    monkeypatch.setattr(routes_job, "get_diffs", lambda requested_job_id: [])
+
+    report_dir = workspace_tmp / "jobs" / job_id
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return report_dir
+
+
+def test_pdf_download_regenerates_with_current_exporter_and_disables_cache(monkeypatch, workspace_tmp):
+    job_id = "j-download"
+    report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
+    old_path = report_dir / "report.pdf"
+    old_path.write_bytes(b"old-pdf")
+
+    def fake_export_pdf(job, out_path):
+        assert job.job_id == job_id
+        assert job.company_name == "Downloaded Project"
+        Path(out_path).write_bytes(b"latest-pdf")
+
+    monkeypatch.setattr(routes_job, "export_pdf", fake_export_pdf, raising=False)
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/{job_id}/report.pdf?template=latest")
+
+    assert response.status_code == 200
+    assert response.content == b"latest-pdf"
+    assert old_path.read_bytes() == b"latest-pdf"
+    assert "no-store" in response.headers["cache-control"]
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
+
+
+def test_excel_download_regenerates_with_current_exporter_and_disables_cache(monkeypatch, workspace_tmp):
+    job_id = "j-download"
+    report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
+    old_path = report_dir / "report.xlsx"
+    old_path.write_bytes(b"old-xlsx")
+
+    def fake_export_excel(job, out_path):
+        assert job.job_id == job_id
+        assert job.company_name == "Downloaded Project"
+        Path(out_path).write_bytes(b"latest-xlsx")
+
+    monkeypatch.setattr(routes_job, "export_excel", fake_export_excel, raising=False)
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/{job_id}/report.xlsx?template=latest")
+
+    assert response.status_code == 200
+    assert response.content == b"latest-xlsx"
+    assert old_path.read_bytes() == b"latest-xlsx"
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_report_download_generation_failure_does_not_serve_stale_file(monkeypatch, workspace_tmp):
+    job_id = "j-download"
+    report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
+    old_path = report_dir / "report.pdf"
+    old_path.write_bytes(b"old-pdf")
+
+    def broken_export_pdf(job, out_path):
+        raise RuntimeError("template unavailable")
+
+    monkeypatch.setattr(routes_job, "export_pdf", broken_export_pdf, raising=False)
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/{job_id}/report.pdf?template=latest")
+
+    assert response.status_code == 500
+    assert old_path.read_bytes() == b"old-pdf"

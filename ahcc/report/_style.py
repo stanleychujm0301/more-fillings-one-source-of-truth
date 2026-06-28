@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 # ============================================================
 # KPMG 调色板
@@ -36,19 +39,42 @@ PANEL = "F4F6FA"         # 标签列 / 分区浅底
 ALERT = "9C2A2A"         # 唯一彩色强调（暗红/oxblood）——只给最高级别与「真实」
 NEUTRAL = "9AA4B2"       # 低级别灰点
 
-# 海军蓝深→浅单色阶：图表柱、有序单色场景
-MONO_RAMP = ["00338D", "27508F", "4A6FA5", "7C97BE", "AFC0D9"]
+# Light report hero ramp. Keep legacy token names for compatibility, but do
+# not use dark/navy fills for report homepages or large chart areas.
+HERO_NAVY = "EEF4FF"
+HERO_BLUE = "DFEBFF"
+HERO_CYAN = "E7FAFF"
+HERO_MIST = "EAF1FF"
+HERO_STEEL = "EEF4FB"
+HERO_WASH = "F4F8FF"
+HERO_LINE = "DCE8FA"
+
+MONO_RAMP = ["7EB9EC", "A9D2F6", "6FCAE0", "C4DDF6", "E6EEF9"]
 
 # ============================================================
 # Apple + 专业金融风格新增常量
 # ============================================================
 FONT_FAMILY = "Microsoft YaHei"      # PDF/Excel 统一主字体
 FONT_FALLBACK = "SimHei"             # PDF TTC 加载失败时回退
-HEADER_BG = "FFFFFF"                 # 表头/标题背景（白底替代蓝底）
-HEADER_BOTTOM = "00338D"             # 表头底部海军蓝强调线
+REPORT_SECTION_FILL = "F7FAFF"
+REPORT_SECTION_RULE = "9DBEE8"
+COVER_GRID_LINE = "E6EEF9"
+COVER_PANEL_TINT = "F1F6FE"
+HEADER_BG = "FFFFFF"                  # 浅色报告风格：表头白底、细蓝底线
+HEADER_TEXT = INK
+HEADER_BOTTOM = REPORT_SECTION_RULE
 DASHBOARD_CARD_BG = "F4F6FA"         # 仪表盘卡片背景（同 PANEL）
 CHART_TITLE_COLOR = "1A1A1A"         # 图表标题墨色
 FOOTER_TEXT = "8A93A3"               # 页脚柔和灰
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+REPORT_SURFACE = "FBFCFE"
+REPORT_PANEL = "FFFFFF"
+REPORT_PANEL_SOFT = "F4F7FD"
+REPORT_PANEL_BORDER = "DDE5F1"
+REPORT_GLOW = "EAF3FF"
+REPORT_MINT = "ECF8F7"
+REPORT_WARM = "FFF8EF"
+REPORT_BLUE_TEXT = "0A3A8F"
 
 # ============================================================
 # 字标（排版式品牌标识，零图片依赖）
@@ -112,12 +138,12 @@ NEUTRAL_RAMP = {
     "n900": "1A1A1A",
 }
 
-# 图表专用色板（克制、专业）— 取自 MONO_RAMP 海军蓝阶
+# 图表专用色板（克制、专业）— 取自 MONO_RAMP 浅蓝阶
 CHART_PALETTE = {
-    "primary": MONO_RAMP[0],     # 00338D
-    "secondary": MONO_RAMP[2],   # 4A6FA5
-    "tertiary": MONO_RAMP[3],    # 7C97BE
-    "quaternary": MONO_RAMP[4],  # AFC0D9
+    "primary": MONO_RAMP[0],
+    "secondary": MONO_RAMP[2],
+    "tertiary": MONO_RAMP[3],
+    "quaternary": MONO_RAMP[4],
     "bg": PANEL,                 # F4F6FA
     "label": FOOTER_TEXT,        # 8A93A3 数值标签
     "grid": HAIRLINE,            # E6EAF2 网格/基线
@@ -276,7 +302,7 @@ def triage_is_real(triage) -> bool:
 
 
 def mono_color(index: int) -> str:
-    """海军蓝单色阶取色，越靠前越深；越界回退最浅。"""
+    """浅蓝单色阶取色，越靠前越有强调；越界回退最浅。"""
     if index < 0:
         index = 0
     return MONO_RAMP[min(index, len(MONO_RAMP) - 1)]
@@ -373,5 +399,49 @@ def format_duration(seconds) -> str:
         return f"{total:.1f} 秒"
     minutes, secs = divmod(int(round(total)), 60)
     return f"{minutes} 分 {secs} 秒"
+
+
+def make_report_temp_dir(parent: Path, prefix: str) -> Path:
+    """Create a writable report temp directory without tempfile ACL surprises on Windows."""
+    base = Path(parent)
+    base.mkdir(parents=True, exist_ok=True)
+    safe_prefix = "".join(ch if ch.isalnum() else "_" for ch in prefix).strip("_") or "tmp"
+    for _ in range(20):
+        candidate = base / f".{safe_prefix}_{uuid4().hex[:12]}"
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+    raise FileExistsError(f"Unable to allocate report temp directory under {base}")
+
+
+def format_beijing_datetime(value) -> str:
+    """把任务时间统一显示为北京时间；naive datetime 按 UTC 处理。"""
+    if not value:
+        return "—"
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, datetime):
+        return "—"
+    dt = value
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M 北京时间")
+
+
+def check_mode_label(check_mode) -> str:
+    key = _norm(check_mode) or "ah"
+    if key == "h_bilingual":
+        return "H 股中英文检查"
+    return "A+H 股报告检查"
+
+
+def conclusion_label(real_count: int = 0, unresolved_count: int = 0) -> str:
+    if real_count:
+        return "需重点复核"
+    if unresolved_count:
+        return "存在待判断事项"
+    return "未发现重大一致性差异"
 
 

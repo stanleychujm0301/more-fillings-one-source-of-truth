@@ -130,13 +130,13 @@ def _style_header(ws) -> None:
     if ws.max_row < 1:
         return
     fill = PatternFill(start_color=S.HEADER_BG, end_color=S.HEADER_BG, fill_type="solid")
-    bottom = Border(bottom=Side(style="thin", color=S.HEADER_BOTTOM))
+    bottom = Border(bottom=Side(style="medium", color=S.HEADER_BOTTOM))
     for cell in ws[1]:
-        cell.font = Font(bold=True, color=S.INK, name=_BODY_FONT, size=11)
+        cell.font = Font(bold=True, color=S.HEADER_TEXT, name=_BODY_FONT, size=12)
         cell.fill = fill
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = bottom
-    ws.row_dimensions[1].height = 32
+    ws.row_dimensions[1].height = 38
 
 
 def _apply_body_style(ws) -> None:
@@ -149,6 +149,8 @@ def _apply_body_style(ws) -> None:
     hair = Side(style="thin", color=S.HAIRLINE)
     border = Border(bottom=hair)
     for row in range(2, ws.max_row + 1):
+        if not ws.row_dimensions[row].height:
+            ws.row_dimensions[row].height = 27
         for col in range(1, ws.max_column + 1):
             cell = ws.cell(row=row, column=col)
             cell.alignment = align
@@ -164,6 +166,10 @@ def _finalize_sheet(ws, widths: dict[str, int] | None = None) -> None:
         return
     _style_header(ws)
     _apply_body_style(ws)
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 90
+    ws.sheet_view.zoomScaleNormal = 90
+    ws.sheet_properties.tabColor = S.KPMG_BLUE
     ws.freeze_panes = "A2"
     if ws.max_row >= 1 and ws.max_column >= 1:
         ws.auto_filter.ref = ws.dimensions
@@ -184,6 +190,18 @@ def _finalize_sheet(ws, widths: dict[str, int] | None = None) -> None:
                 ws.column_dimensions[get_column_letter(idx)].width = min(45, max(9, widest + 2))
     else:
         _auto_column_widths(ws)
+    ws.page_margins.left = 0.35
+    ws.page_margins.right = 0.35
+    ws.page_margins.top = 0.55
+    ws.page_margins.bottom = 0.55
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+
+
+def _finalize_workbook(wb) -> None:
+    for ws in wb.worksheets:
+        ws.sheet_view.showGridLines = False
+        ws.sheet_properties.tabColor = S.KPMG_BLUE
 
 
 # ============================================================
@@ -241,15 +259,15 @@ def export_excel(job: Job, out_path: Path) -> None:
 
     # 总览 sheet 放最前；但保持「差异清单」为 active（现有测试依赖 wb.active）
     import shutil
-    import tempfile
 
-    chart_dir = Path(tempfile.mkdtemp(prefix="ahcc_xlsx_chart_"))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_dir = S.make_report_temp_dir(out_path.parent, "ahcc_xlsx_chart")
     try:
         ws_overview = wb.create_sheet("核查总览", 0)
         _write_overview_sheet(ws_overview, job, chart_dir)
+        _finalize_workbook(wb)
         wb.active = wb.index(ws)
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(out_path)
     finally:
         shutil.rmtree(chart_dir, ignore_errors=True)
@@ -279,7 +297,7 @@ _DIFF_WIDTHS = {
 
 
 def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = None) -> None:
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     _append_row(ws, headers)
 
@@ -314,15 +332,24 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
     triage_col = headers.index("分流") + 1
     value_cols = [headers.index(h) + 1 for h in ("A 股值", "H 股值", "差异") if h in headers]
 
-    from openpyxl.styles import Border, Side
     from openpyxl.utils import get_column_letter
     from openpyxl.formatting.rule import DataBarRule
 
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     hair = Side(style="thin", color=S.HAIRLINE)
+    chip_fill = PatternFill(start_color=S.REPORT_PANEL_SOFT, end_color=S.REPORT_PANEL_SOFT, fill_type="solid")
+    chip_border = Border(
+        left=Side(style="thin", color=S.REPORT_PANEL_BORDER),
+        right=Side(style="thin", color=S.REPORT_PANEL_BORDER),
+        top=Side(style="thin", color=S.REPORT_PANEL_BORDER),
+        bottom=hair,
+    )
+    ws.sheet_view.zoomScale = 85
+    ws.sheet_view.zoomScaleNormal = 85
     for offset, diff in enumerate(sorted_diffs):
         row = offset + 2
         sev_key = str(getattr(diff.severity, "value", diff.severity)).lower()
+        ws.row_dimensions[row].height = 36
 
         # 严重度：文字着色（高级别暗红加粗，其余灰）——不再整列实色块
         scell = ws.cell(row=row, column=sev_col)
@@ -332,6 +359,8 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
             color=S.severity_accent(sev_key),
         )
         scell.alignment = center
+        scell.fill = chip_fill
+        scell.border = chip_border
 
         # 分流：文字着色（real 暗红，其余灰）
         tri_key = str(getattr(diff.triage, "value", diff.triage)).lower()
@@ -342,6 +371,8 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
             color=S.triage_accent(tri_key),
         )
         tcell.alignment = center
+        tcell.fill = chip_fill
+        tcell.border = chip_border
 
         # 左侧强调条：按严重度粗细/颜色变化
         width = S.severity_border_width(sev_key)
@@ -352,6 +383,7 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
                 left=Side(style="medium" if width >= 2.0 else "thin", color=color),
                 bottom=hair,
             )
+            idcell.font = Font(name=_BODY_FONT, size=10, bold=True, color=S.INK)
 
         for vcol in value_cols:
             vcell = ws.cell(row=row, column=vcol)
@@ -375,43 +407,150 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
 # ============================================================
 # 核查总览
 # ============================================================
-def _premium_title_block(ws, row: int, title: str, subtitle: str = "") -> int:
-    """premium 标题块：eyebrow 字标 + 大标题 + 副标题 + 海军蓝细线。返回下一行号。"""
-    from openpyxl.styles import Alignment, Border, Font, Side
+def _premium_title_block(
+    ws,
+    row: int,
+    title: str,
+    subtitle: str = "",
+    conclusion: str = "",
+    priority_note: str = "",
+) -> int:
+    """One-page hero 标题块：浅色 landing-page 首页 + 右侧优先级卡片。"""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    span_last = "H"
+    span_last = "I"
+    hero_fill = PatternFill(start_color=S.HERO_WASH, end_color=S.HERO_WASH, fill_type="solid")
+    wordmark_fill = PatternFill(start_color=S.REPORT_SURFACE, end_color=S.REPORT_SURFACE, fill_type="solid")
+    panel_fill = PatternFill(start_color=S.REPORT_PANEL, end_color=S.REPORT_PANEL, fill_type="solid")
+    accent = Side(style="thin", color=S.REPORT_SECTION_RULE)
+    hair = Side(style="thin", color=S.REPORT_PANEL_BORDER)
+    for rr in range(row, row + 8):
+        for cc in range(1, 10):
+            cell = ws.cell(row=rr, column=cc)
+            cell.fill = wordmark_fill if rr == row else hero_fill
+            if rr == row + 7:
+                cell.border = Border(bottom=accent)
+            else:
+                cell.border = Border()
 
     # eyebrow 字标
     ws.merge_cells(f"A{row}:{span_last}{row}")
     c = ws.cell(row=row, column=1, value=S.WORDMARK)
-    c.font = Font(name=_BODY_FONT, size=8.5, color=S.FOOTER_TEXT)
+    c.font = Font(name=_BODY_FONT, size=9, bold=True, color=S.INK)
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[row].height = 18
+    ws.row_dimensions[row].height = 22
     row += 1
 
     # 大标题
-    ws.merge_cells(f"A{row}:{span_last}{row}")
+    ws.merge_cells(f"A{row}:F{row + 2}")
     c = ws.cell(row=row, column=1, value=title)
-    c.font = Font(name=_BODY_FONT, size=18, bold=False, color=S.INK)
+    c.font = Font(name=_BODY_FONT, size=24, bold=True, color=S.KPMG_BLUE)
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[row].height = 34
-    row += 1
+    ws.row_dimensions[row].height = 30
+    ws.row_dimensions[row + 1].height = 30
+    ws.row_dimensions[row + 2].height = 18
+
+    ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=9)
+    c = ws.cell(row=row, column=7, value="ONE PAGE REVIEW")
+    c.font = Font(name=_BODY_FONT, size=9, bold=True, color=S.KPMG_BLUE)
+    c.alignment = Alignment(horizontal="center", vertical="bottom")
+    ws.merge_cells(start_row=row + 1, start_column=7, end_row=row + 2, end_column=9)
+    c = ws.cell(row=row + 1, column=7, value=conclusion or "Evidence-led review")
+    c.font = Font(name=_BODY_FONT, size=15, bold=True, color=S.ALERT if conclusion and "重点" in conclusion else S.KPMG_BLUE)
+    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    row += 3
 
     # 副标题（公司名）
     if subtitle:
-        ws.merge_cells(f"A{row}:{span_last}{row}")
-        c = ws.cell(row=row, column=1, value=subtitle)
+        ws.merge_cells(f"A{row}:F{row}")
+        c = ws.cell(row=row, column=1, value=f"项目名称 · {subtitle}")
         c.font = Font(name=_BODY_FONT, size=11, color=S.INK_SOFT)
         c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
         ws.row_dimensions[row].height = 20
-        row += 1
+    ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=9)
+    c = ws.cell(row=row, column=7, value=priority_note or "Evidence-led review")
+    c.font = Font(name=_BODY_FONT, size=9, color=S.INK_SOFT)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    # Right-side priority card: white surface floating on the light hero.
+    for rr in range(row - 3, row + 1):
+        for cc in range(7, 10):
+            cell = ws.cell(row=rr, column=cc)
+            cell.fill = panel_fill
+            cell.border = Border(
+                left=hair if cc == 7 else Side(style=None),
+                right=hair if cc == 9 else Side(style=None),
+                top=hair if rr == row - 3 else Side(style=None),
+                bottom=hair if rr == row else Side(style=None),
+            )
 
-    # 海军蓝细线
-    navy = Side(style="thin", color=S.KPMG_BLUE)
-    for col in range(1, 9):
-        ws.cell(row=row, column=col).border = Border(bottom=navy)
-    ws.row_dimensions[row].height = 4
-    return row + 1
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    c = ws.cell(row=row, column=1, value="Evidence-led disclosure consistency review")
+    c.font = Font(name=_BODY_FONT, size=9, color=S.INK_SOFT)
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=9)
+    c = ws.cell(row=row, column=7, value="Executive Report")
+    c.font = Font(name=_BODY_FONT, size=9, bold=True, color=S.KPMG_BLUE)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 20
+
+    row += 3
+    ws.row_dimensions[row - 1].height = 5
+    return row
+
+
+def _write_context_strip(ws, start_row: int, items: list[tuple[str, object]]) -> int:
+    """横向信息轨道，替代传统元数据表。"""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    groups = [(1, 2), (3, 4), (5, 6), (7, 9)]
+    panel = PatternFill(start_color=S.REPORT_PANEL, end_color=S.REPORT_PANEL, fill_type="solid")
+    hair = Side(style="thin", color=S.REPORT_PANEL_BORDER)
+    accent = Side(style="thin", color=S.REPORT_SECTION_RULE)
+    for (sc, ec), (label, value) in zip(groups, items):
+        ws.merge_cells(start_row=start_row, start_column=sc, end_row=start_row, end_column=ec)
+        ws.merge_cells(start_row=start_row + 1, start_column=sc, end_row=start_row + 1, end_column=ec)
+        for rr in (start_row, start_row + 1):
+            for cc in range(sc, ec + 1):
+                cell = ws.cell(row=rr, column=cc)
+                cell.fill = panel
+                cell.border = Border(top=accent if rr == start_row else Side(style=None), bottom=hair)
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True, indent=1)
+        ws.cell(row=start_row, column=sc, value=label).font = Font(name=_BODY_FONT, size=8.5, color=S.FOOTER_TEXT)
+        ws.cell(row=start_row + 1, column=sc, value=_clean_cell(str(value))).font = Font(name=_BODY_FONT, size=9.5, bold=True, color=S.INK)
+    ws.row_dimensions[start_row].height = 17
+    ws.row_dimensions[start_row + 1].height = 23
+    return start_row + 3
+
+
+def _write_review_path(ws, start_row: int) -> int:
+    """浅色三段审阅动线：把报告从“结果”导向“复核动作”。"""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    _section_header(ws, start_row, "审阅动线", span=9)
+    card_row = start_row + 1
+    note_row = start_row + 2
+    groups = [
+        (1, 3, "01 真实差异", "优先复核真实差异和重大项目"),
+        (4, 6, "02 证据定位", "沿 A/H 页码、摘录和差异值追溯"),
+        (7, 9, "03 人工复核", "形成审阅结论并更新状态"),
+    ]
+    panel = PatternFill(start_color=S.HERO_WASH, end_color=S.HERO_WASH, fill_type="solid")
+    border = Border(bottom=Side(style="thin", color=S.REPORT_PANEL_BORDER))
+    for sc, ec, title, note in groups:
+        ws.merge_cells(start_row=card_row, start_column=sc, end_row=card_row, end_column=ec)
+        ws.merge_cells(start_row=note_row, start_column=sc, end_row=note_row, end_column=ec)
+        for row in (card_row, note_row):
+            for col in range(sc, ec + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.fill = panel
+                cell.border = border
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.cell(row=card_row, column=sc, value=title).font = Font(name=_BODY_FONT, size=10, bold=True, color=S.KPMG_BLUE)
+        ws.cell(row=note_row, column=sc, value=note).font = Font(name=_BODY_FONT, size=8, color=S.INK_SOFT)
+    ws.row_dimensions[card_row].height = 18
+    ws.row_dimensions[note_row].height = 18
+    return start_row + 3
 
 
 def _write_kpi_cards(ws, start_row: int, metrics: list[tuple]) -> int:
@@ -421,7 +560,7 @@ def _write_kpi_cards(ws, start_row: int, metrics: list[tuple]) -> int:
     """
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    panel = PatternFill(start_color=S.PANEL, end_color=S.PANEL, fill_type="solid")
+    panel = PatternFill(start_color=S.REPORT_PANEL, end_color=S.REPORT_PANEL, fill_type="solid")
     # 三张卡片三等分 A:C / D:F / G:I
     col_groups = [(1, 3), (4, 6), (7, 9)]
 
@@ -507,13 +646,41 @@ def _embed_distribution_charts(ws, job: Job, chart_dir: Path, anchor_row: int) -
     return embedded
 
 
+def _paint_chart_stage(ws, anchor_row: int) -> None:
+    """Paint light dashboard panels behind embedded chart images."""
+    from openpyxl.styles import Border, PatternFill, Side
+
+    panel = PatternFill(start_color=S.REPORT_PANEL, end_color=S.REPORT_PANEL, fill_type="solid")
+    hair = Side(style="thin", color=S.REPORT_PANEL_BORDER)
+    for start_col, end_col in ((1, 4), (6, 9)):
+        for rr in range(anchor_row, anchor_row + 13):
+            ws.row_dimensions[rr].height = max(ws.row_dimensions[rr].height or 0, 18)
+            for cc in range(start_col, end_col + 1):
+                cell = ws.cell(row=rr, column=cc)
+                cell.fill = panel
+                cell.border = Border(
+                    left=hair if cc == start_col else Side(style=None),
+                    right=hair if cc == end_col else Side(style=None),
+                    top=hair if rr == anchor_row else Side(style=None),
+                    bottom=hair if rr == anchor_row + 12 else Side(style=None),
+                )
+
+
 def _write_overview_sheet(ws, job: Job, chart_dir: Path | None = None) -> None:
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     summary = job.comparison_summary or {}
     bilingual = getattr(job, "check_mode", "ah") == "h_bilingual"
     title = "H 股中英文报告一致性核查报告" if bilingual else "A+H 股年报数据一致性核查报告"
     company = job.company_name or "—"
+    real_count = summary.get("real_diff_count", sum(1 for d in job.diffs if d.triage == "real"))
+    unresolved_count = summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved"))
+    conclusion = S.conclusion_label(int(real_count or 0), int(unresolved_count or 0))
+
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 90
+    ws.sheet_properties.tabColor = S.KPMG_BLUE
+    ws.freeze_panes = "A2"
 
     # 列宽：三等分卡片 + 适度留白
     for col, w in (("A", 13), ("B", 13), ("C", 13), ("D", 13), ("E", 13),
@@ -521,40 +688,54 @@ def _write_overview_sheet(ws, job: Job, chart_dir: Path | None = None) -> None:
         ws.column_dimensions[col].width = w
 
     # —— premium 标题块 ——
-    row = _premium_title_block(ws, 1, title, company)
+    row = _premium_title_block(
+        ws,
+        1,
+        title,
+        company,
+        conclusion,
+        f"真实差异 {real_count} 项 · 待判断 {unresolved_count} 项",
+    )
 
-    # —— 元数据 ——
-    def _ts(dt):
-        try:
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return ""
-
-    gen_time = _ts(job.finished_at) or _ts(job.started_at)
+    # —— context strip ——
+    gen_time = S.format_beijing_datetime(job.finished_at or job.started_at)
     dur = S.format_duration(job.duration_seconds)
-    meta_rows = [
-        ("任务编号", job.job_id),
-        ("核查模式", summary.get("mode_label", "H 股中英文检查" if bilingual else "A+H 股报告检查")),
+    context_items = [
+        ("项目名称", company),
+        ("核查模式", summary.get("mode_label", S.check_mode_label(getattr(job, "check_mode", "ah")))),
+        ("生成时间", gen_time),
         ("核查耗时", dur),
-        ("生成时间", gen_time or "—"),
     ]
-    label_font = Font(name=_BODY_FONT, size=9, color=S.FOOTER_TEXT)
-    value_font = Font(name=_BODY_FONT, size=9, color=S.INK)
-    for label, value in meta_rows:
-        ws.cell(row=row, column=1, value=label).font = label_font
-        ws.cell(row=row, column=2, value=_clean_cell(str(value))).font = value_font
-        ws.row_dimensions[row].height = 16
-        row += 1
+    row = _write_context_strip(ws, row, context_items)
+
+    # —— 执行摘要 ——
+    _section_header(ws, row, "执行摘要", span=9)
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+    ws.merge_cells(start_row=row, start_column=4, end_row=row, end_column=9)
+    ws.cell(row=row, column=1, value=conclusion).font = Font(name=_BODY_FONT, size=14, bold=True, color=S.ALERT if real_count else S.KPMG_BLUE)
+    ws.cell(row=row, column=1).alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.cell(row=row, column=4, value=f"审阅提示：优先复核真实差异、待判断事项及证据定位；完整明细见「差异清单」。").font = Font(name=_BODY_FONT, size=9, color=S.INK_SOFT)
+    ws.cell(row=row, column=4).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    fill = PatternFill(start_color=S.REPORT_PANEL, end_color=S.REPORT_PANEL, fill_type="solid")
+    hair = Side(style="thin", color=S.REPORT_PANEL_BORDER)
+    for col in range(1, 10):
+        ws.cell(row=row, column=col).fill = fill
+        ws.cell(row=row, column=col).border = Border(bottom=hair)
+    ws.row_dimensions[row].height = 28
+
+    # —— 审阅动线 ——
+    row += 1
+    row = _write_review_path(ws, row)
 
     # —— KPI 卡片 ——
-    row += 1
     metrics = [
         ("差异总数", summary.get("total_diff_count", len(job.diffs)), "全部差异条数", False),
-        ("真实差异", summary.get("real_diff_count", sum(1 for d in job.diffs if d.triage == "real")), "需重点关注", True),
+        ("真实差异", real_count, "需重点关注", True),
         ("预期差异", summary.get("expected_diff_count", sum(1 for d in job.diffs if d.triage == "expected")), "可解释差异", False),
-        ("待判断", summary.get("unresolved_diff_count", sum(1 for d in job.diffs if d.triage == "unresolved")), "需人工确认", False),
+        ("待判断", unresolved_count, "需人工确认", False),
         ("披露覆盖", summary.get("coverage_count", len(job.coverage_items)), "匹配 / 单边项", False),
-        ("提取预警", summary.get("warning_count", 0), f"阻断 {summary.get('blocking_warning_count', 0)} / 辅助 {summary.get('aux_warning_count', 0)}", False),
+        ("核查耗时", dur, f"生成时间 {gen_time}", False),
     ]
     row = _write_kpi_cards(ws, row, metrics)
 
@@ -587,9 +768,10 @@ def _write_overview_sheet(ws, job: Job, chart_dir: Path | None = None) -> None:
             row += 1
 
     # —— 分布图 ——
-    row += 2
+    row += 1
     _section_header(ws, row, "分布概览", span=9)
-    row += 2
+    row += 1
+    _paint_chart_stage(ws, row)
     embedded = False
     if chart_dir is not None:
         embedded = _embed_distribution_charts(ws, job, chart_dir, row)
@@ -686,10 +868,10 @@ def _section_header(ws, row: int, text: str, span: int = 3) -> None:
     ws.merge_cells(f"A{row}:{get_column_letter(span)}{row}")
     cell = ws.cell(row=row, column=1, value=text)
     cell.font = Font(name=_BODY_FONT, size=12, bold=True, color=S.INK)
-    cell.fill = PatternFill(start_color=S.PANEL, end_color=S.PANEL, fill_type="solid")
+    cell.fill = PatternFill(start_color=S.REPORT_SECTION_FILL, end_color=S.REPORT_SECTION_FILL, fill_type="solid")
     cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     # 浅底 + 墨色字 + 底部细线（去掉高饱和紫色块）
-    underline = Side(style="thin", color=S.KPMG_BLUE)
+    underline = Side(style="thin", color=S.REPORT_SECTION_RULE)
     for col in range(1, span + 1):
         ws.cell(row=row, column=col).border = Border(bottom=underline)
     ws.row_dimensions[row].height = 22

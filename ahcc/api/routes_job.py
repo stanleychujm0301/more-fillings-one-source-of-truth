@@ -4,22 +4,32 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from loguru import logger
 
 from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
+from ahcc.report.excel import export_excel
+from ahcc.report.pdf import export_pdf
 from ahcc.schemas import Diff, Job
-from ahcc.storage.repository import get_diffs, get_job, list_jobs, save_job
+from ahcc.storage.repository import apply_current_user_context, get_diffs, get_job, list_jobs, save_job
 
 router = APIRouter()
 
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 
 @router.get("/history")
-def list_jobs_endpoint(limit: int = 10) -> list[dict]:
+def list_jobs_endpoint(limit: int = 10, scope: str = "project") -> list[dict]:
     """列出历史核查任务。"""
-    return list_jobs(limit)
+    return list_jobs(limit, scope=scope)
 
 
 @router.post("/", response_model=Job)
@@ -62,12 +72,15 @@ async def create_job(
         normalized_check_mode,
         bilingual_level=normalized_bilingual_level,
     )
+    job = apply_current_user_context(job)
     save_job(job)
     return job
 
 
 @router.get("/{job_id}/diffs", response_model=list[Diff])
 def list_diffs(job_id: str) -> list[Diff]:
+    if not get_job(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
     return get_diffs(job_id)
 
 
@@ -83,15 +96,56 @@ def get_job_detail(job_id: str):
 
 @router.get("/{job_id}/report.xlsx")
 def download_excel(job_id: str):
-    path = settings.storage_dir / "jobs" / job_id / "report.xlsx"
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Excel report not found")
-    return FileResponse(path, filename=f"AHCC-{job_id}.xlsx")
+    path = _regenerate_report(job_id, "report.xlsx", export_excel)
+    return _no_cache_report_response(path, filename=f"AHCC-{job_id}.xlsx")
 
 
 @router.get("/{job_id}/report.pdf")
 def download_pdf(job_id: str):
-    path = settings.storage_dir / "jobs" / job_id / "report.pdf"
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="PDF report not found")
-    return FileResponse(path, filename=f"AHCC-{job_id}.pdf")
+    path = _regenerate_report(job_id, "report.pdf", export_pdf)
+    return _no_cache_report_response(path, filename=f"AHCC-{job_id}.pdf")
+
+
+def _load_job_for_report(job_id: str) -> Job:
+    job_meta = get_job(job_id)
+    if not job_meta:
+        raise HTTPException(status_code=404, detail="job not found")
+    payload = dict(job_meta)
+    payload["diffs"] = get_diffs(job_id)
+    return Job.model_validate(payload)
+
+
+def _regenerate_report(job_id: str, report_name: str, exporter) -> Path:
+    job = _load_job_for_report(job_id)
+    out_dir = settings.storage_dir / "jobs" / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    target = out_dir / report_name
+    temp_path = target.with_name(f".{target.stem}.{uuid4().hex}{target.suffix}")
+    try:
+        exporter(job, temp_path)
+        if not temp_path.is_file():
+            raise RuntimeError(f"{report_name} exporter did not create a file")
+        shutil.copyfile(temp_path, target)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _remove_temp_report(temp_path)
+        logger.exception(f"[{job_id}] report regeneration failed: {report_name}")
+        raise HTTPException(status_code=500, detail=f"{report_name} regeneration failed") from exc
+    finally:
+        _remove_temp_report(temp_path)
+    return target
+
+
+def _no_cache_report_response(path: Path, *, filename: str) -> FileResponse:
+    response = FileResponse(path, filename=filename)
+    response.headers.update(_NO_CACHE_HEADERS)
+    return response
+
+
+def _remove_temp_report(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning(f"Unable to remove temporary report file: {path}")

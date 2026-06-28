@@ -66,6 +66,7 @@ class Settings(BaseSettings):
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
         (self.storage_dir / "jobs").mkdir(parents=True, exist_ok=True)
+        (self.storage_dir / "user-assets" / "avatars").mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

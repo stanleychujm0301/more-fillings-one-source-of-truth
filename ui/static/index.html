@@ -37,6 +37,8 @@
 
             /* ── Brand ── */
             --kpmg-blue: #00338D;
+            --kpmg-navy: #24266F;
+            --kpmg-navy-deep: #1B1F5F;
             --kpmg-blue-bright: #1E5CD8;
             --accent: #00338D;
             --accent-light: #EDF2FB;
@@ -125,48 +127,53 @@
             position: sticky;
             top: 0;
             z-index: 100;
-            background: rgba(255,255,255,0.68);
-            backdrop-filter: blur(24px) saturate(180%);
-            -webkit-backdrop-filter: blur(24px) saturate(180%);
-            border-bottom: 1px solid rgba(0,0,0,0.06);
+            background: #FFFFFF;
+            border-bottom: 1px solid rgba(0,51,141,0.12);
+            box-shadow: 0 10px 30px rgba(13,21,32,0.08);
+        }
+        .kpmg-logo {
+            flex: 0 0 auto;
+            display: block;
+            width: 112px;
+            height: auto;
         }
         .header-inner {
             max-width: 1800px;
             margin: 0 auto;
             padding: 0 1.5rem;
-            height: 56px;
+            min-height: 72px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 1rem;
+            background: #FFFFFF;
         }
         .brand {
             display: flex;
             align-items: center;
-            gap: 0.6rem;
-        }
-        .brand-title {
-            font-size: 1.1rem;
-            color: var(--kpmg-blue);
-            font-weight: 700;
-            letter-spacing: -0.01em;
+            gap: 1rem;
+            min-width: 0;
+            flex-wrap: wrap;
         }
         .brand-sub {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            padding: 5px 13px;
-            background: var(--kpmg-blue);
+            min-height: 34px;
+            padding: 0.38rem 1.05rem;
+            background: linear-gradient(90deg, #273382 0%, #354090 100%);
             color: #fff;
             border-radius: 100px;
-            font-size: 0.72rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            box-shadow: 0 6px 18px rgba(36,38,111,0.22);
         }
         .brand-sub-en {
-            font-size: 0.65rem;
-            font-weight: 500;
+            font-size: 0.72rem;
+            font-weight: 800;
             opacity: 0.8;
-            letter-spacing: 0.04em;
+            letter-spacing: 0;
             text-transform: uppercase;
         }
 
@@ -179,9 +186,9 @@
             border-radius: 100px;
             font-size: 0.75rem;
             font-weight: 600;
-            background: rgba(0,0,0,0.04);
-            color: var(--text-secondary);
-            border: 1px solid rgba(0,0,0,0.08);
+            background: rgba(0,51,141,0.06);
+            color: var(--kpmg-blue);
+            border: 1px solid rgba(0,51,141,0.14);
             transition: all 0.3s var(--ease-out-expo);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -240,11 +247,11 @@
         }
         .control-rail {
             position: sticky;
-            top: 76px;
+            top: 92px;
             display: flex;
             flex-direction: column;
             gap: 1rem;
-            max-height: calc(100vh - 100px);
+            max-height: calc(100vh - 116px);
             min-width: 0;
         }
         .work-area {
@@ -784,13 +791,34 @@
 
         /* ── Launch Panel ── */
         .launch-panel {
-            padding: 1.25rem 1.4rem;
-            min-height: 180px;
+            position: relative;
+            overflow: hidden;
+            padding: 1.35rem 1.45rem;
+            min-height: 188px;
             display: grid;
             grid-template-columns: 1fr;
             gap: 1rem;
             align-items: stretch;
-            border: 1px solid var(--border-hairline);
+            border: 1px solid rgba(0,51,141,0.16);
+            border-top: 4px solid var(--kpmg-navy);
+            background:
+                linear-gradient(135deg, rgba(0,51,141,0.08) 0%, rgba(255,255,255,0.96) 38%, #FFFFFF 100%);
+            box-shadow: var(--shadow-md);
+        }
+        .launch-panel::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(90deg, rgba(0,51,141,0.08) 0 1px, transparent 1px 100%),
+                linear-gradient(0deg, rgba(0,51,141,0.06) 0 1px, transparent 1px 100%);
+            background-size: 48px 48px;
+            opacity: 0.26;
+        }
+        .launch-panel > * {
+            position: relative;
+            z-index: 1;
         }
         .launch-panel.hidden { display: none; }
         .launch-head {
@@ -802,19 +830,19 @@
         }
         .launch-eyebrow,
         .review-eyebrow {
-            color: var(--kpmg-blue);
+            color: var(--kpmg-navy);
             font-size: 0.68rem;
             font-weight: 700;
-            letter-spacing: 0.08em;
+            letter-spacing: 0;
             text-transform: uppercase;
         }
         .launch-title {
             margin-top: 0.2rem;
-            font-size: 1.45rem;
+            font-size: 1.58rem;
             line-height: 1.2;
-            color: var(--text);
-            font-weight: 720;
-            letter-spacing: -0.02em;
+            color: #17204F;
+            font-weight: 800;
+            letter-spacing: 0;
         }
         .launch-copy {
             margin-top: 0.4rem;
@@ -828,19 +856,21 @@
             align-items: center;
             gap: 0.4rem;
             padding: 0.45rem 0.7rem;
-            background: var(--accent-light);
-            color: var(--kpmg-blue);
-            border: 1px solid rgba(0,51,141,0.1);
+            background: #FFFFFF;
+            color: var(--kpmg-navy);
+            border: 1px solid rgba(0,51,141,0.18);
             border-radius: 100px;
             font-size: 0.75rem;
             font-weight: 640;
             white-space: nowrap;
+            box-shadow: var(--shadow-xs);
         }
         .launch-status::before {
             content: '';
             width: 7px; height: 7px;
             border-radius: 50%;
-            background: var(--kpmg-blue);
+            background: var(--teal);
+            box-shadow: 0 0 0 4px rgba(0,158,155,0.12);
         }
         .launch-grid {
             display: grid;
@@ -848,16 +878,17 @@
             gap: 0.55rem;
         }
         .launch-step {
-            border: 1px solid var(--border-hairline);
+            border: 1px solid rgba(0,51,141,0.12);
             border-radius: var(--radius-lg);
-            background: rgba(0,0,0,0.012);
+            background: rgba(255,255,255,0.82);
             padding: 0.9rem 0.95rem;
             transition: all 0.25s var(--ease-out-expo);
+            box-shadow: var(--shadow-xs);
         }
         .launch-step:hover {
             background: #FFFFFF;
             box-shadow: var(--shadow-sm);
-            border-color: var(--border-light);
+            border-color: rgba(0,51,141,0.24);
         }
         .launch-step span {
             display: inline-flex;
@@ -865,18 +896,18 @@
             align-items: center;
             justify-content: center;
             border-radius: 8px;
-            background: var(--accent-light);
-            color: var(--kpmg-blue);
+            background: var(--kpmg-navy);
+            color: #FFFFFF;
             font-size: 0.74rem;
             font-weight: 700;
             margin-bottom: 0.6rem;
         }
         .launch-step strong {
             display: block;
-            color: var(--text);
+            color: #17204F;
             font-size: 0.9rem;
-            font-weight: 650;
-            letter-spacing: -0.01em;
+            font-weight: 700;
+            letter-spacing: 0;
         }
         .launch-step small {
             display: block;
@@ -2402,8 +2433,28 @@
             }
             .review-panel { min-height: 220px; }
         }
+        @media (max-width: 860px) {
+            .kpmg-logo {
+                width: 96px;
+            }
+            .header-inner {
+                align-items: flex-start;
+                padding-top: 0.7rem;
+                padding-bottom: 0.7rem;
+                flex-direction: column;
+            }
+            .brand-sub {
+                align-items: flex-start;
+                border-radius: 18px;
+                flex-direction: column;
+                gap: 0.1rem;
+            }
+            .status-badge {
+                align-self: flex-start;
+            }
+        }
         @media (max-width: 768px) {
-            .header-inner { padding: 0 1rem; }
+            .header-inner { padding-left: 1rem; padding-right: 1rem; }
             .control-rail .upload-grid { grid-template-columns: 1fr; }
             .work-area { gap: 0.75rem; }
             .launch-grid { grid-template-columns: 1fr; }
@@ -2426,22 +2477,46 @@
             }
             .review-current-meta { justify-content: flex-start; }
         }
+        @media (max-width: 560px) {
+            .brand {
+                width: 100%;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.55rem;
+            }
+            .brand-sub {
+                align-self: flex-start;
+                width: 100%;
+                max-width: min(340px, calc(100dvw - 2rem));
+                flex-wrap: wrap;
+                justify-content: flex-start;
+                row-gap: 0.2rem;
+                padding: 0.5rem 0.9rem;
+                border-radius: 16px;
+            }
+            .brand-sub-zh,
+            .brand-sub-en {
+                line-height: 1.15;
+            }
+            .brand-sub-en {
+                font-size: 0.64rem;
+            }
+        }
 </style>
 </head>
 <body>
     <header class="header">
         <div class="header-inner">
             <div class="brand">
-                <span class="brand-title">KPMG Hackathon</span>
+                <img class="kpmg-logo" src="assets/kpmg-logo.svg" alt="KPMG">
                 <span class="brand-sub">
                     <span class="brand-sub-zh">多重披露，一次核对</span>
-                    <span class="brand-sub-en">more fillings, one source of truth</span>
+                    <span class="brand-sub-en">MORE FILLINGS, ONE SOURCE OF TRUTH</span>
                 </span>
             </div>
             <div class="status-badge" id="statusBadge">
-                    <span class="dot"></span>
-                    <span id="statusText">就绪</span>
-                </div>
+                <span class="dot"></span>
+                <span id="statusText">就绪</span>
             </div>
         </div>
     </header>

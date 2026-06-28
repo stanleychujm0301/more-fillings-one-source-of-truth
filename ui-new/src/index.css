@@ -1,0 +1,48 @@
+:root {
+  --bg: #edf0f5;
+  --surface: #ffffff;
+  --surface-soft: #f7faff;
+  --ink: #0d1520;
+  --muted: #667085;
+  --line: rgba(18, 38, 63, 0.12);
+  --kpmg-blue: #00338d;
+  --kpmg-deep: #001b54;
+  --cyan: #00a3e0;
+  --green: #16a34a;
+  --amber: #b7791f;
+  --red: #c2410c;
+  --shadow: 0 14px 44px rgba(16, 34, 71, 0.1);
+  --font: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color-scheme: light;
+
+  font-family: var(--font);
+  color: var(--ink);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}

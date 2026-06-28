@@ -54,6 +54,35 @@ def test_static_upload_ui_collects_and_posts_company_name() -> None:
     assert "renderExplanationItems" in html
 
 
+def test_static_header_uses_kpmg_logo_and_keeps_tagline() -> None:
+    html = Path("ui/static/index.html").read_text(encoding="utf-8")
+    logo = Path("ui/static/assets/kpmg-logo.svg")
+
+    assert 'class="kpmg-logo"' in html
+    assert 'src="assets/kpmg-logo.svg"' in html
+    assert "kpmg-logo-grid" not in html
+    assert "kpmg-word" not in html
+    assert re.search(
+        r"@media \(max-width: 560px\).*?\.brand\s*\{[^}]*flex-direction:\s*column;",
+        html,
+        re.S,
+    )
+    assert re.search(
+        r"@media \(max-width: 560px\).*?\.brand-sub\s*\{[^}]*flex-wrap:\s*wrap;",
+        html,
+        re.S,
+    )
+    assert "min(340px, calc(100dvw - 2rem))" in html
+    assert logo.exists()
+    logo_svg = logo.read_text(encoding="utf-8")
+    assert 'viewBox="0 0 77 30"' in logo_svg
+    assert 'fill="#00338d"' in logo_svg
+    assert "MORE FILLINGS, ONE SOURCE OF TRUTH" in html
+    assert "AI Audit Cockpit" not in html
+    assert "Objective-Centric Agentic Audit Monitoring Platform" not in html
+    assert '<span class="brand-title">KPMG Hackathon</span>' not in html
+
+
 def test_streamlit_upload_posts_company_name() -> None:
     app = Path("archive/internal/ui-streamlit-legacy/app.py").read_text(encoding="utf-8")
 

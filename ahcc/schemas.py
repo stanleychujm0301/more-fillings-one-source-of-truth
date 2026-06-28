@@ -324,6 +324,10 @@ class Job(BaseModel):
     job_id: str
     company_name: Optional[str] = Field(None, max_length=80)
     check_mode: CheckMode = "ah"
+    owner_user_id: Optional[str] = None
+    owner_display_name: Optional[str] = None
+    project_group_id: Optional[str] = None
+    project_group_name: Optional[str] = None
     a_file: str
     h_file: str
     status: JobStatus = JobStatus.PENDING

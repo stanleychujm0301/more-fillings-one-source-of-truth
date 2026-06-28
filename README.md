@@ -2,6 +2,29 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
+## 参赛演示入口
+
+正式参赛演示应使用公网全栈地址，例如 `https://<your-domain>/app#/cockpit`。`127.0.0.1 不是评委可访问地址`：它只指向访问者自己的电脑，所以评委远程打开 `http://127.0.0.1:8001/app#/cockpit` 不会访问到你的机器。
+
+本项目的新 React 前端由 FastAPI 同源服务，根路径 `/` 和 `/app#/cockpit` 都会进入核查工作台；`/health` 可用于赛前确认当前后端进程和报告模板已经启动。
+
+推荐公网部署方式：
+
+```bash
+docker build -t ahcc-competition .
+docker run --rm -p 8001:8001 -e DEEPSEEK_API_KEY=sk-xxx ahcc-competition
+```
+
+Render/Railway/Fly.io 等支持 Docker Web Service 的平台可直接使用仓库根目录的 `Dockerfile`；Render 可使用 `render.yaml`，并在平台控制台配置 `DEEPSEEK_API_KEY`。部署后用 `/health` 检查服务，再打开公网 `/app#/cockpit` 上传 PDF、生成任务并下载新版 PDF/Excel 报告。
+
+本地或现场兜底演示可运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps1
+```
+
+该脚本会在本机 `8001` 启动后端并打开 `http://127.0.0.1:8001/app#/cockpit`，只适合你自己的电脑或现场同机演示，不适合作为评委远程入口。
+
 > 跨市场年报数据一致性核查工具：自动比对 A 股与 H 股年报中的数值、披露、准则差异与图表一致性，输出带证据链的差异报告。
 >
 > 本项目源于 KPMG 黑客松 China Challenge #1，现整理为开源项目供审计、投行、研究与开发者使用。
