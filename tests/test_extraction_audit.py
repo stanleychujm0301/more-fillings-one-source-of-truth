@@ -14,7 +14,7 @@ from ahcc.storage.repository import _attach_current_extraction_metadata, _saniti
 
 
 def test_extraction_engine_version_marks_branch_repair_release():
-    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.6"
+    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.7"
 
 
 def _cached_doc(file_path: Path, marker: str = "v1") -> ReportDocument:

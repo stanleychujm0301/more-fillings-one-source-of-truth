@@ -653,6 +653,23 @@ def test_health_endpoint_exposes_branch_repair_marker():
     assert '"branch_repair_version": 1' in api_main
 
 
+def test_health_endpoint_exposes_storage_persistence_diagnostics():
+    api_main = API_MAIN.read_text(encoding="utf-8")
+
+    for token in (
+        '"storage"',
+        '"storage_dir"',
+        '"sqlite_path"',
+        '"storage_dir_exists"',
+        '"sqlite_parent_exists"',
+        '"storage_on_var_data"',
+        '"sqlite_on_var_data"',
+        "settings.storage_dir",
+        "settings.sqlite_path",
+    ):
+        assert token in api_main
+
+
 def test_backend_declares_opencc_for_deployment_parity():
     pyproject = PYPROJECT.read_text(encoding="utf-8")
 

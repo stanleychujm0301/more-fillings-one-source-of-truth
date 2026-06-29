@@ -7,7 +7,7 @@ from typing import Any
 
 from ahcc.schemas import ExtractionAudit, ReportDocument, TextSegment
 
-EXTRACTION_ENGINE_VERSION = "2026-06-01.6"
+EXTRACTION_ENGINE_VERSION = "2026-06-01.7"
 PARSER_VERSION = EXTRACTION_ENGINE_VERSION
 
 _AUXILIARY_FLAGS = {

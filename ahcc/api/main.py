@@ -64,7 +64,29 @@ def health() -> dict:
         "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
         "result_version": RESULT_VERSION,
         "branch_repair_version": 1,
+        "storage": _storage_health(),
     }
+
+
+def _storage_health() -> dict:
+    storage_dir = settings.storage_dir
+    sqlite_path = settings.sqlite_path
+    return {
+        "storage_dir": str(storage_dir),
+        "sqlite_path": str(sqlite_path),
+        "storage_dir_exists": storage_dir.exists(),
+        "sqlite_parent_exists": sqlite_path.parent.exists(),
+        "storage_on_var_data": _path_is_under(storage_dir, Path("/var/data")),
+        "sqlite_on_var_data": _path_is_under(sqlite_path, Path("/var/data")),
+    }
+
+
+def _path_is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _no_cache_index() -> FileResponse:
