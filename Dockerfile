@@ -1,13 +1,23 @@
-FROM node:20-bookworm-slim AS ui-builder
+ARG NODE_IMAGE=node:22-bookworm-slim
+ARG PYTHON_IMAGE=python:3.12-slim
+
+FROM ${NODE_IMAGE} AS ui-builder
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /app
 COPY ui-new/package*.json ./ui-new/
 WORKDIR /app/ui-new
-RUN npm ci
+RUN npm config set registry "${NPM_REGISTRY}" \
+    && npm ci
 COPY ui-new/ ./
 RUN npm run build
 
-FROM python:3.12-slim AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
+
+ARG USE_ALIYUN_APT_MIRROR=1
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -20,7 +30,13 @@ ENV CHROMA_PERSIST_DIR=/var/data/storage/chroma
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN if [ "${USE_ALIYUN_APT_MIRROR}" = "1" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+          -e 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' \
+          -e 's|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' \
+          /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
@@ -39,8 +55,8 @@ COPY rules ./rules
 COPY ui ./ui
 COPY --from=ui-builder /app/ui-new/dist ./ui-new/dist
 
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -e . \
+RUN python -m pip install --upgrade pip -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
+    && python -m pip install --no-cache-dir -e . -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
     && mkdir -p /var/data/storage
 
 EXPOSE 8001
