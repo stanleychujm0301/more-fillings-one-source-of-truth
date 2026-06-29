@@ -20,6 +20,7 @@ ROOT_PACKAGE_LOCK = ROOT / "package-lock.json"
 ROOT_NPMRC = ROOT / ".npmrc"
 ROOT_NODE_VERSION = ROOT / ".node-version"
 ROOT_NVMRC = ROOT / ".nvmrc"
+PYPROJECT = ROOT / "pyproject.toml"
 EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
 ZEABUR_DOC = ROOT / "docs" / "zeabur_deployment.md"
 
@@ -650,6 +651,12 @@ def test_health_endpoint_exposes_branch_repair_marker():
     api_main = API_MAIN.read_text(encoding="utf-8")
 
     assert '"branch_repair_version": 1' in api_main
+
+
+def test_backend_declares_opencc_for_deployment_parity():
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
+
+    assert "opencc-python-reimplemented" in pyproject
 
 
 def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():

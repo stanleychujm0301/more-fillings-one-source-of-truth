@@ -22,6 +22,42 @@ from ahcc.schemas import (
 from ahcc.check.explanation import make_value_explanation
 
 _BRANCH_ROW_PATTERN = re.compile(r"([一-龥]{2,6}分行)\s+(\d{1,3})\s+([\d,]{5,12})")
+_BRANCH_NAME_T2S_OVERRIDES = str.maketrans(
+    {
+        "廣": "广",
+        "烏": "乌",
+        "魯": "鲁",
+        "齊": "齐",
+        "瀋": "沈",
+        "臺": "台",
+        "長": "长",
+        "蘇": "苏",
+        "寧": "宁",
+        "廈": "厦",
+        "門": "门",
+        "連": "连",
+        "薩": "萨",
+        "無": "无",
+        "錫": "锡",
+        "盧": "卢",
+        "莊": "庄",
+        "島": "岛",
+        "龍": "龙",
+        "濟": "济",
+        "鄭": "郑",
+        "蘭": "兰",
+        "貴": "贵",
+        "陽": "阳",
+        "慶": "庆",
+        "漢": "汉",
+        "濱": "滨",
+        "爾": "尔",
+        "煙": "烟",
+        "內": "内",
+        "銀": "银",
+        "灣": "湾",
+    }
+)
 
 
 def extract_branch_table(doc: ReportDocument) -> dict[str, dict]:
@@ -77,7 +113,8 @@ def branch_table_diagnostics(
 
 def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None:
     for match in _BRANCH_ROW_PATTERN.finditer(text):
-        name = match.group(1)
+        raw_name = match.group(1)
+        name = _normalize_branch_name(raw_name)
         count_str = match.group(2)
         asset_str = match.group(3)
 
@@ -91,6 +128,7 @@ def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None
         if name not in branches:
             branches[name] = {
                 "name": name,
+                "raw_name": raw_name,
                 "count": count,
                 "asset": asset,
                 "page": page,
@@ -259,7 +297,7 @@ def _branch_row_evidence_confident(data: dict) -> bool:
     snippet = re.sub(r"\s+", " ", str(data.get("snippet") or ""))
     if not name or not count or asset is None or not snippet:
         return False
-    if name not in snippet:
+    if name not in _normalize_branch_name(snippet):
         return False
     if not re.search(rf"\b{re.escape(count)}\b", snippet):
         return False
@@ -267,6 +305,12 @@ def _branch_row_evidence_confident(data: dict) -> bool:
     asset_plain = asset_text.replace(",", "")
     snippet_digits = snippet.replace(",", "")
     return asset_text in snippet or asset_plain in snippet_digits
+
+
+def _normalize_branch_name(text: str) -> str:
+    simplified = to_simplified(str(text or ""))
+    simplified = simplified.translate(_BRANCH_NAME_T2S_OVERRIDES)
+    return re.sub(r"\s+", "", simplified)
 
 
 def _severity_for_branch_diff(pct_abs: float) -> DiffSeverity:

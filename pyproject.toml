@@ -20,6 +20,7 @@ dependencies = [
     # PDF / HTML 解析
     "pdfplumber>=0.11",
     "pymupdf>=1.24",
+    "opencc-python-reimplemented>=0.1.7",
     "camelot-py[cv]>=0.11",
     "beautifulsoup4>=4.12",
     "lxml>=5.2",

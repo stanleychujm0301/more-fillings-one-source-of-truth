@@ -1596,6 +1596,72 @@ def test_branch_table_fallback_count_mismatch_stays_out_of_real_diffs() -> None:
     assert diffs == []
 
 
+def test_branch_table_matches_traditional_names_without_opencc(monkeypatch) -> None:
+    from ahcc.align import glossary as glossary_module
+
+    monkeypatch.setattr(glossary_module, "_OPENCC_CONVERTER_T2S", False)
+
+    a_doc = ReportDocument(
+        doc_id="A",
+        side=ReportSide.A_SHARE,
+        file_path="a.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[
+            TextSegment(
+                segment_id="a-branch",
+                page=30,
+                bbox=(0, 0, 1, 1),
+                text=(
+                    "广州分行 10 100,000 乌鲁木齐分行 8 80,000 沈阳分行 6 60,000 "
+                    "长沙分行 4 40,000 大连分行 3 30,000 拉萨分行 2 20,000 "
+                    "无锡分行 5 50,000 卢森堡分行 1 10,000 石家庄分行 7 70,000 "
+                    "青岛分行 9 90,000 黑龙江分行 11 110,000"
+                ),
+                language=Language.ZH,
+            )
+        ],
+    )
+    h_doc = ReportDocument(
+        doc_id="H",
+        side=ReportSide.H_SHARE,
+        file_path="h.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[
+            TextSegment(
+                segment_id="h-branch",
+                page=31,
+                bbox=(0, 0, 1, 1),
+                text=(
+                    "廣州分行 10 120,000 烏魯木齊分行 8 90,000 瀋陽分行 6 70,000 "
+                    "長沙分行 4 50,000 大連分行 3 40,000 拉薩分行 2 30,000 "
+                    "無錫分行 5 60,000 盧森堡分行 1 20,000 石家莊分行 7 80,000 "
+                    "青島分行 9 100,000 黑龍江分行 11 120,000"
+                ),
+                language=Language.ZH,
+            )
+        ],
+    )
+
+    diffs = compare_branch_tables(a_doc, h_doc)
+
+    assert len(diffs) == 11
+    assert {diff.diff_id for diff in diffs} == {
+        "BRANCH_广州分行",
+        "BRANCH_乌鲁木齐分行",
+        "BRANCH_沈阳分行",
+        "BRANCH_长沙分行",
+        "BRANCH_大连分行",
+        "BRANCH_拉萨分行",
+        "BRANCH_无锡分行",
+        "BRANCH_卢森堡分行",
+        "BRANCH_石家庄分行",
+        "BRANCH_青岛分行",
+        "BRANCH_黑龙江分行",
+    }
+
+
 def test_comparison_summary_exposes_branch_diagnostics_and_file_hashes() -> None:
     import hashlib
     import shutil
