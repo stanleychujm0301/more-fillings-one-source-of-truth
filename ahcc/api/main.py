@@ -63,6 +63,7 @@ def health() -> dict:
         "status": "ok",
         "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
         "result_version": RESULT_VERSION,
+        "branch_repair_version": 1,
     }
 
 

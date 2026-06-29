@@ -13,6 +13,10 @@ from ahcc.schemas import Language, ReportDocument, ReportSide
 from ahcc.storage.repository import _attach_current_extraction_metadata, _sanitize_summary_for_loaded_job
 
 
+def test_extraction_engine_version_marks_branch_repair_release():
+    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.5"
+
+
 def _cached_doc(file_path: Path, marker: str = "v1") -> ReportDocument:
     return ReportDocument(
         doc_id=f"doc-{marker}",
@@ -365,4 +369,3 @@ def test_pages_with_zero_segments_ignore_blank_pages() -> None:
     assert audit.blank_pages == [2]
     assert audit.pages_with_zero_segments == []
     assert "pages_with_zero_segments" not in audit.warning_flags
-

@@ -646,6 +646,12 @@ def test_ui_new_is_served_from_root_and_static_legacy_moves_to_legacy_route():
     assert 'app.mount("/", StaticFiles' not in api_main
 
 
+def test_health_endpoint_exposes_branch_repair_marker():
+    api_main = API_MAIN.read_text(encoding="utf-8")
+
+    assert '"branch_repair_version": 1' in api_main
+
+
 def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():
     vite_config = VITE_CONFIG.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")
