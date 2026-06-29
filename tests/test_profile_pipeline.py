@@ -22,6 +22,7 @@ from ahcc.schemas import (
     Evidence,
     ExtractionAudit,
     FinancialTable,
+    Job,
     Language,
     LocalizedString,
     ReportDocument,
@@ -1475,6 +1476,214 @@ def test_branch_table_count_mismatch_stays_out_of_real_diffs() -> None:
     diffs = compare_branch_tables(a_doc, h_doc)
 
     assert diffs == []
+
+
+def _branch_table_from_rows(table_id: str, page: int, rows: list[tuple[str, int, str]]) -> FinancialTable:
+    cells = [
+        TableCell(row=0, col=0, text="分行名称", is_header=True),
+        TableCell(row=0, col=1, text="机构数量", is_header=True),
+        TableCell(row=0, col=2, text="资产规模", is_header=True),
+    ]
+    for row_idx, (name, count, asset) in enumerate(rows, start=1):
+        cells.extend(
+            [
+                TableCell(row=row_idx, col=0, text=name),
+                TableCell(row=row_idx, col=1, text=str(count)),
+                TableCell(row=row_idx, col=2, text=asset),
+            ]
+        )
+    return FinancialTable(
+        table_id=table_id,
+        title=LocalizedString(zh="分支机构情况表"),
+        page=page,
+        bbox=(0.0, 0.0, 1.0, 1.0),
+        cells=cells,
+        unit="人民币百万元",
+    )
+
+
+def test_branch_table_fallback_reconstructs_rows_from_structured_table_cells() -> None:
+    a_doc = ReportDocument(
+        doc_id="A",
+        side=ReportSide.A_SHARE,
+        file_path="a.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[],
+        tables=[
+            _branch_table_from_rows(
+                "A_branch",
+                30,
+                [
+                    ("北京分行", 10, "100,000"),
+                    ("上海分行", 8, "80,000"),
+                    ("广州分行", 6, "60,000"),
+                ],
+            )
+        ],
+    )
+    h_doc = ReportDocument(
+        doc_id="H",
+        side=ReportSide.H_SHARE,
+        file_path="h.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[],
+        tables=[
+            _branch_table_from_rows(
+                "H_branch",
+                31,
+                [
+                    ("北京分行", 10, "120,000"),
+                    ("上海分行", 8, "80,000"),
+                    ("广州分行", 6, "60,000"),
+                ],
+            )
+        ],
+    )
+
+    diffs = compare_branch_tables(a_doc, h_doc)
+
+    assert len(diffs) == 1
+    assert diffs[0].triage == "real"
+    assert diffs[0].rule_id == "branch_asset_scale_match"
+    assert "北京分行" in diffs[0].topic.zh
+    assert diffs[0].evidence[0].snippet == "北京分行 10 100,000"
+
+
+def test_branch_table_fallback_count_mismatch_stays_out_of_real_diffs() -> None:
+    a_doc = ReportDocument(
+        doc_id="A",
+        side=ReportSide.A_SHARE,
+        file_path="a.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[],
+        tables=[
+            _branch_table_from_rows(
+                "A_branch",
+                30,
+                [
+                    ("北京分行", 10, "100,000"),
+                    ("上海分行", 8, "80,000"),
+                    ("广州分行", 6, "60,000"),
+                ],
+            )
+        ],
+    )
+    h_doc = ReportDocument(
+        doc_id="H",
+        side=ReportSide.H_SHARE,
+        file_path="h.pdf",
+        total_pages=10,
+        primary_language=Language.ZH,
+        texts=[],
+        tables=[
+            _branch_table_from_rows(
+                "H_branch",
+                31,
+                [
+                    ("北京分行", 11, "120,000"),
+                    ("上海分行", 8, "80,000"),
+                    ("广州分行", 6, "60,000"),
+                ],
+            )
+        ],
+    )
+
+    diffs = compare_branch_tables(a_doc, h_doc)
+
+    assert diffs == []
+
+
+def test_comparison_summary_exposes_branch_diagnostics_and_file_hashes() -> None:
+    import hashlib
+    import shutil
+    from pathlib import Path
+    from uuid import uuid4
+
+    from ahcc.orchestrator import Orchestrator
+
+    work_dir = Path("storage") / "test-artifacts" / f"branch-diagnostics-{uuid4().hex}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    a_file = work_dir / "a.pdf"
+    h_file = work_dir / "h.pdf"
+    a_payload = b"A report bytes"
+    h_payload = b"H report bytes"
+    try:
+        a_file.write_bytes(a_payload)
+        h_file.write_bytes(h_payload)
+
+        a_doc = ReportDocument(
+            doc_id="A",
+            side=ReportSide.A_SHARE,
+            file_path=str(a_file),
+            total_pages=10,
+            primary_language=Language.ZH,
+            texts=[],
+            tables=[
+                _branch_table_from_rows(
+                    "A_branch",
+                    30,
+                    [
+                        ("北京分行", 10, "100,000"),
+                        ("上海分行", 8, "80,000"),
+                        ("广州分行", 6, "60,000"),
+                    ],
+                )
+            ],
+            metadata={"parser_cache": {"hit": False, "key": "a-cache-key"}},
+        )
+        h_doc = ReportDocument(
+            doc_id="H",
+            side=ReportSide.H_SHARE,
+            file_path=str(h_file),
+            total_pages=10,
+            primary_language=Language.ZH,
+            texts=[],
+            tables=[
+                _branch_table_from_rows(
+                    "H_branch",
+                    31,
+                    [
+                        ("北京分行", 10, "120,000"),
+                        ("上海分行", 8, "80,000"),
+                        ("广州分行", 6, "60,000"),
+                    ],
+                )
+            ],
+            metadata={"parser_cache": {"hit": True, "key": "h-cache-key"}},
+        )
+        profile_a = _profile(ReportSide.A_SHARE)
+        profile_h = _profile(ReportSide.H_SHARE)
+        profile_a.source_doc = a_doc
+        profile_h.source_doc = h_doc
+        profile_a.metadata = a_doc.metadata
+        profile_h.metadata = h_doc.metadata
+        branch_diffs = compare_branch_tables(a_doc, h_doc)
+        job = Job(
+            job_id="branch-diag",
+            company_name="Branch Diagnostics",
+            a_file=str(a_file),
+            h_file=str(h_file),
+            diffs=branch_diffs,
+        )
+
+        summary = Orchestrator()._build_comparison_summary(job, profile_a, profile_h, module_warnings=[])
+
+        assert summary["a_file_sha256"] == hashlib.sha256(a_payload).hexdigest()
+        assert summary["h_file_sha256"] == hashlib.sha256(h_payload).hexdigest()
+        assert summary["branch_source_doc_available"] is True
+        assert summary["a_branch_count"] == 3
+        assert summary["h_branch_count"] == 3
+        assert summary["matched_branch_count"] == 3
+        assert summary["branch_diff_count"] == 1
+        assert summary["branch_alignment_ratio"] == 1.0
+        assert summary["parser_cache_hit"] is False
+        assert summary["parser_cache"]["a"]["key"] == "a-cache-key"
+        assert summary["parser_cache"]["h"]["key"] == "h-cache-key"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def test_compare_profiles_reports_internal_consistency() -> None:

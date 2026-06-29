@@ -24,7 +24,7 @@ from ahcc.parser.table_extract import (
     merge_tables,
 )
 
-H_PDF_CACHE_VERSION = "h_pdf_v2"
+H_PDF_CACHE_VERSION = "h_pdf_v3"
 
 
 def _h_pdf_cache_dir() -> Path:

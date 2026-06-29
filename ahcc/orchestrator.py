@@ -400,6 +400,77 @@ class Orchestrator:
         raw = (getattr(doc, "metadata", {}) or {}).get("extraction_audit") or {}
         return raw if isinstance(raw, dict) else {}
 
+    def _doc_parser_cache_payload(self, doc: ReportDocument | None, profile=None) -> dict:
+        if doc is not None:
+            raw = (getattr(doc, "metadata", {}) or {}).get("parser_cache") or {}
+            if isinstance(raw, dict):
+                return raw
+        raw = (getattr(profile, "metadata", {}) or {}).get("parser_cache") or {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _file_sha256(self, file_path: str | None) -> str | None:
+        if not file_path:
+            return None
+        path = Path(file_path)
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            import hashlib
+
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"计算文件 SHA-256 失败: {file_path}: {exc}")
+            return None
+
+    def _branch_diagnostic_warnings(
+        self,
+        doc_a: ReportDocument | None,
+        doc_h: ReportDocument | None,
+        branch_diagnostics: dict[str, object],
+    ) -> list[dict]:
+        warnings: list[dict] = []
+        if doc_a is None:
+            warnings.append({
+                "side": "A",
+                "flag": "branch_source_doc_missing",
+                "message": "A-share source_doc is unavailable; branch disclosure check was skipped.",
+                "category": "extraction",
+                "severity": "medium",
+                "blocking": False,
+            })
+        if doc_h is None:
+            warnings.append({
+                "side": "H",
+                "flag": "branch_source_doc_missing",
+                "message": "H-share source_doc is unavailable; branch disclosure check was skipped.",
+                "category": "extraction",
+                "severity": "medium",
+                "blocking": False,
+            })
+        if doc_a is not None and int(branch_diagnostics.get("a_branch_count") or 0) == 0:
+            warnings.append({
+                "side": "A",
+                "flag": "branch_table_not_extracted",
+                "message": "A-share branch disclosure table was not extracted; check PDF table parsing output.",
+                "category": "extraction",
+                "severity": "medium",
+                "blocking": False,
+            })
+        if doc_h is not None and int(branch_diagnostics.get("h_branch_count") or 0) == 0:
+            warnings.append({
+                "side": "H",
+                "flag": "branch_table_not_extracted",
+                "message": "H-share branch disclosure table was not extracted; check PDF table parsing output.",
+                "category": "extraction",
+                "severity": "medium",
+                "blocking": False,
+            })
+        return warnings
+
     def _collect_doc_extraction_warnings(self, doc_a: ReportDocument, doc_h: ReportDocument) -> list[dict]:
         from ahcc.parser.audit import classify_warning
 
@@ -598,11 +669,19 @@ class Orchestrator:
         module_warnings: list | None = None,
     ) -> dict:
         from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION
+        from ahcc.check.branch_disclosure import branch_table_diagnostics
 
         a_audit = self._audit_payload(profile_a)
         h_audit = self._audit_payload(profile_h)
+        doc_a = getattr(profile_a, "source_doc", None)
+        doc_h = getattr(profile_h, "source_doc", None)
+        a_parser_cache = self._doc_parser_cache_payload(doc_a, profile_a)
+        h_parser_cache = self._doc_parser_cache_payload(doc_h, profile_h)
+        branch_diagnostics = branch_table_diagnostics(doc_a, doc_h, job.diffs)
+        branch_warnings = self._branch_diagnostic_warnings(doc_a, doc_h, branch_diagnostics)
         warnings = [
             *self._collect_extraction_warnings(profile_a, profile_h),
+            *branch_warnings,
             *(module_warnings or []),
         ]
         blocking_warnings = [item for item in warnings if item.get("blocking")]
@@ -615,6 +694,8 @@ class Orchestrator:
             "check_mode": "ah",
             "mode_label": "A+H股报告检查",
             "side_labels": {"A": "A", "H": "H"},
+            "a_file_sha256": self._file_sha256(job.a_file),
+            "h_file_sha256": self._file_sha256(job.h_file),
             "a_fact_count": sum(len(occ.all_occurrences) for occ in profile_a.metrics),
             "h_fact_count": sum(len(occ.all_occurrences) for occ in profile_h.metrics),
             "a_metric_keys": len(profile_a.metrics),
@@ -640,6 +721,12 @@ class Orchestrator:
             "aux_warning_count": len(auxiliary_warnings),
             "a_warning_count": sum(1 for item in warnings if item.get("side") == "A"),
             "h_warning_count": sum(1 for item in warnings if item.get("side") == "H"),
+            "parser_cache_hit": bool(a_parser_cache.get("hit")) and bool(h_parser_cache.get("hit")),
+            "parser_cache": {
+                "a": a_parser_cache,
+                "h": h_parser_cache,
+            },
+            **branch_diagnostics,
             "warnings": warnings,
             "a_extraction_audit": a_audit,
             "h_extraction_audit": h_audit,

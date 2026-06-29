@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from loguru import logger
+
 from ahcc.align.glossary import to_simplified
 from ahcc.schemas import (
     Diff,
@@ -19,9 +21,11 @@ from ahcc.schemas import (
 )
 from ahcc.check.explanation import make_value_explanation
 
+_BRANCH_ROW_PATTERN = re.compile(r"([一-龥]{2,6}分行)\s+(\d{1,3})\s+([\d,]{5,12})")
+
 
 def extract_branch_table(doc: ReportDocument) -> dict[str, dict]:
-    """从报告文本段中提取分支机构分布表数据。
+    """从报告文本段与结构化表格中提取分支机构分布表数据。
 
     匹配模式：分支机构名称 + 数量 + 资产规模（百万元）
     例：北京分行 75 810,136 北京市西城区宣武门内大街1号
@@ -36,29 +40,79 @@ def extract_branch_table(doc: ReportDocument) -> dict[str, dict]:
 
         # 匹配模式：XXX分行 <数量> <资产规模> <地址>
         # 数量：1-3位整数；资产规模：带逗号的千分位数字
-        pattern = r"([一-龥]{2,6}分行)\s+(\d{1,3})\s+([\d,]{5,12})"
-        for match in re.finditer(pattern, text):
-            name = match.group(1)
-            count_str = match.group(2)
-            asset_str = match.group(3)
+        _add_branch_matches(branches, text, seg.page)
 
-            try:
-                count = int(count_str)
-                asset = float(asset_str.replace(",", ""))
-            except ValueError:
-                continue
-
-            # 跳过已存在（取第一次出现的）
-            if name not in branches:
-                branches[name] = {
-                    "name": name,
-                    "count": count,
-                    "asset": asset,
-                    "page": seg.page,
-                    "snippet": match.group(0),
-                }
+    for row_text, page in _branch_table_rows_from_cells(doc):
+        if "分行" not in row_text:
+            continue
+        _add_branch_matches(branches, row_text, page)
 
     return branches
+
+
+def branch_table_diagnostics(
+    a_doc: ReportDocument | None,
+    h_doc: ReportDocument | None,
+    diffs: list[Diff] | None = None,
+) -> dict[str, object]:
+    """Return stable diagnostics for deployment parity checks."""
+    source_doc_available = bool(a_doc and h_doc)
+    a_branches = extract_branch_table(a_doc) if a_doc else {}
+    h_branches = extract_branch_table(h_doc) if h_doc else {}
+    matched_names = sorted(set(a_branches) & set(h_branches))
+    branch_diff_count = (
+        sum(1 for diff in diffs or [] if diff.rule_id == "branch_asset_scale_match")
+        if diffs is not None
+        else _count_branch_asset_diffs(a_branches, h_branches, matched_names)
+    )
+    return {
+        "branch_source_doc_available": source_doc_available,
+        "a_branch_count": len(a_branches),
+        "h_branch_count": len(h_branches),
+        "matched_branch_count": len(matched_names),
+        "branch_diff_count": branch_diff_count,
+        "branch_alignment_ratio": _branch_alignment_ratio(a_branches, h_branches, matched_names),
+    }
+
+
+def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None:
+    for match in _BRANCH_ROW_PATTERN.finditer(text):
+        name = match.group(1)
+        count_str = match.group(2)
+        asset_str = match.group(3)
+
+        try:
+            count = int(count_str)
+            asset = float(asset_str.replace(",", ""))
+        except ValueError:
+            continue
+
+        # 跳过已存在（取第一次出现的）
+        if name not in branches:
+            branches[name] = {
+                "name": name,
+                "count": count,
+                "asset": asset,
+                "page": page,
+                "snippet": match.group(0),
+            }
+
+
+def _branch_table_rows_from_cells(doc: ReportDocument) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = []
+    for table in doc.tables:
+        grouped: dict[int, list[tuple[int, str]]] = {}
+        for cell in table.cells:
+            text = to_simplified(str(cell.text or "").strip())
+            if not text:
+                continue
+            grouped.setdefault(cell.row, []).append((cell.col, text))
+        for _, cells in sorted(grouped.items()):
+            parts = [text for _, text in sorted(cells, key=lambda item: item[0])]
+            row_text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+            if row_text:
+                rows.append((row_text, table.page))
+    return rows
 
 
 def compare_branch_tables(
@@ -68,8 +122,16 @@ def compare_branch_tables(
     a_branches = extract_branch_table(a_doc)
     h_branches = extract_branch_table(h_doc)
     matched_names = sorted(set(a_branches) & set(h_branches))
+    alignment_ratio = _branch_alignment_ratio(a_branches, h_branches, matched_names)
 
     if not _branch_alignment_confident(a_branches, h_branches, matched_names):
+        logger.info(
+            "分支机构披露检查：A={} H={} matched={} alignment={:.2f} diffs=0 skipped=alignment",
+            len(a_branches),
+            len(h_branches),
+            len(matched_names),
+            alignment_ratio,
+        )
         return []
 
     diffs: list[Diff] = []
@@ -147,7 +209,31 @@ def compare_branch_tables(
                 )
             )
 
+    logger.info(
+        "分支机构披露检查：A={} H={} matched={} alignment={:.2f} diffs={}",
+        len(a_branches),
+        len(h_branches),
+        len(matched_names),
+        alignment_ratio,
+        len(diffs),
+    )
     return diffs
+
+
+def _count_branch_asset_diffs(a_branches: dict[str, dict], h_branches: dict[str, dict], matched_names: list[str]) -> int:
+    if not _branch_alignment_confident(a_branches, h_branches, matched_names):
+        return 0
+    count = 0
+    for name in matched_names:
+        a_data = a_branches[name]
+        h_data = h_branches[name]
+        if a_data.get("count") != h_data.get("count"):
+            continue
+        if not _branch_row_evidence_confident(a_data) or not _branch_row_evidence_confident(h_data):
+            continue
+        if a_data.get("asset") != h_data.get("asset"):
+            count += 1
+    return count
 
 
 def _branch_alignment_confident(a_branches: dict[str, dict], h_branches: dict[str, dict], matched_names: list[str]) -> bool:
@@ -157,6 +243,13 @@ def _branch_alignment_confident(a_branches: dict[str, dict], h_branches: dict[st
     if smaller_side < 5:
         return True
     return len(matched_names) / smaller_side >= 0.6
+
+
+def _branch_alignment_ratio(a_branches: dict[str, dict], h_branches: dict[str, dict], matched_names: list[str]) -> float:
+    smaller_side = min(len(a_branches), len(h_branches))
+    if not smaller_side:
+        return 0.0
+    return round(len(matched_names) / smaller_side, 4)
 
 
 def _branch_row_evidence_confident(data: dict) -> bool:
