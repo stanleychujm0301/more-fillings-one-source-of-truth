@@ -12,11 +12,14 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from loguru import logger
 
+from ahcc.check.branch_disclosure import branch_table_diagnostics, compare_branch_tables
 from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
+from ahcc.parser import parse_report
+from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION
 from ahcc.report.excel import export_excel
 from ahcc.report.pdf import export_pdf
-from ahcc.schemas import Diff, Job, JobStatus
+from ahcc.schemas import Diff, Job, JobStatus, Language, ReportDocument, ReportSide, TextSegment
 from ahcc.storage.repository import apply_current_user_context, get_diffs, get_job, list_jobs, save_job
 
 router = APIRouter()
@@ -110,6 +113,7 @@ async def _run_job_background(job: Job, *, bilingual_level: str = "fast") -> Non
 
 @router.get("/{job_id}/diffs", response_model=list[Diff])
 def list_diffs(job_id: str) -> list[Diff]:
+    _repair_branch_diffs_if_needed(job_id)
     if not get_job(job_id):
         raise HTTPException(status_code=404, detail="job not found")
     return get_diffs(job_id)
@@ -118,6 +122,7 @@ def list_diffs(job_id: str) -> list[Diff]:
 @router.get("/{job_id}")
 def get_job_detail(job_id: str):
     """获取单个历史任务详情（含 diffs）。"""
+    _repair_branch_diffs_if_needed(job_id)
     job_meta = get_job(job_id)
     if not job_meta:
         raise HTTPException(status_code=404, detail="job not found")
@@ -138,6 +143,7 @@ def download_pdf(job_id: str):
 
 
 def _load_job_for_report(job_id: str) -> Job:
+    _repair_branch_diffs_if_needed(job_id)
     job_meta = get_job(job_id)
     if not job_meta:
         raise HTTPException(status_code=404, detail="job not found")
@@ -180,3 +186,118 @@ def _remove_temp_report(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         logger.warning(f"Unable to remove temporary report file: {path}")
+
+
+def _repair_branch_diffs_if_needed(job_id: str) -> bool:
+    job_meta = get_job(job_id)
+    if not job_meta:
+        return False
+    diffs = get_diffs(job_id)
+    summary = dict(job_meta.get("comparison_summary") or {})
+    if not _branch_repair_needed(job_meta, summary, diffs):
+        return False
+
+    a_path = Path(str(job_meta.get("a_file") or ""))
+    h_path = Path(str(job_meta.get("h_file") or ""))
+    if not a_path.is_file() or not h_path.is_file():
+        return False
+
+    try:
+        doc_a = _load_branch_repair_doc(str(a_path), ReportSide.A_SHARE)
+        doc_h = _load_branch_repair_doc(str(h_path), ReportSide.H_SHARE)
+        branch_diffs = compare_branch_tables(doc_a, doc_h)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"[{job_id}] branch diff repair failed")
+        return False
+
+    if not branch_diffs:
+        return False
+
+    existing_ids = {diff.diff_id for diff in diffs}
+    merged_diffs = [
+        *diffs,
+        *(diff for diff in branch_diffs if diff.diff_id not in existing_ids),
+    ]
+    repaired_summary = _summary_with_repaired_branch_diffs(
+        summary,
+        merged_diffs,
+        doc_a,
+        doc_h,
+        repaired_count=len(branch_diffs),
+    )
+    payload = dict(job_meta)
+    payload["diffs"] = merged_diffs
+    payload["comparison_summary"] = repaired_summary
+    save_job(Job.model_validate(payload))
+    logger.info(f"[{job_id}] repaired branch disclosure diffs: +{len(branch_diffs)}")
+    return True
+
+
+def _load_branch_repair_doc(file_path: str, side: ReportSide) -> ReportDocument:
+    """Load only page text for fast branch-disclosure repair; fall back to full parser."""
+    try:
+        import fitz
+    except ImportError:
+        return parse_report(file_path, side)
+
+    pdf = fitz.open(file_path)
+    texts: list[TextSegment] = []
+    for page_number, page in enumerate(pdf, start=1):
+        text = page.get_text("text")
+        if not text:
+            continue
+        texts.append(
+            TextSegment(
+                segment_id=f"{side.value}-branch-repair-{page_number}",
+                page=page_number,
+                bbox=(0, 0, 1, 1),
+                text=text,
+                language=Language.ZH,
+            )
+        )
+    return ReportDocument(
+        doc_id=f"{side.value}-branch-repair",
+        side=side,
+        file_path=file_path,
+        total_pages=pdf.page_count,
+        primary_language=Language.ZH,
+        texts=texts,
+    )
+
+
+def _branch_repair_needed(job_meta: dict, summary: dict, diffs: list[Diff]) -> bool:
+    if (job_meta.get("check_mode") or "ah") != "ah":
+        return False
+    if str(job_meta.get("status") or "").lower() != JobStatus.DONE.value:
+        return False
+    if any(diff.rule_id == "branch_asset_scale_match" for diff in diffs):
+        return False
+    if int(summary.get("branch_diff_count") or 0) != 0:
+        return False
+    if int(summary.get("a_branch_count") or 0) <= 0 or int(summary.get("h_branch_count") or 0) <= 0:
+        return False
+    return float(summary.get("branch_alignment_ratio") or 0.0) < 0.6
+
+
+def _summary_with_repaired_branch_diffs(
+    summary: dict,
+    diffs: list[Diff],
+    doc_a,
+    doc_h,
+    *,
+    repaired_count: int,
+) -> dict:
+    repaired = dict(summary)
+    repaired.update(branch_table_diagnostics(doc_a, doc_h, diffs))
+    repaired["result_version"] = int(summary.get("result_version") or 11)
+    repaired["parser_version"] = PARSER_VERSION
+    repaired["extraction_engine_version"] = EXTRACTION_ENGINE_VERSION
+    repaired["current_extraction_engine_version"] = EXTRACTION_ENGINE_VERSION
+    repaired["stale_result"] = False
+    repaired["real_diff_count"] = sum(1 for diff in diffs if diff.triage == "real")
+    repaired["expected_diff_count"] = sum(1 for diff in diffs if diff.triage == "expected")
+    repaired["unresolved_diff_count"] = sum(1 for diff in diffs if diff.triage == "unresolved")
+    repaired["total_diff_count"] = len(diffs)
+    repaired["branch_repaired_from_source_files"] = True
+    repaired["branch_repair_diff_count_added"] = repaired_count
+    return repaired
