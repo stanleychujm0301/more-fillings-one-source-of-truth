@@ -1,17 +1,16 @@
 # Tencent EdgeOne Pages Deployment
 
-This project can use Tencent EdgeOne Pages as the public competition entry, but
-EdgeOne Pages should be treated as the static frontend plus edge proxy layer.
-The real checker backend still needs a public FastAPI service that can run
-Python, parse PDFs, write storage, and generate PDF/Excel reports.
+Use Tencent EdgeOne Pages as the public static frontend entry. The real checker
+backend must still run on a public FastAPI service because it needs Python, PDF
+parsing, persistent storage, and PDF/Excel report generation.
 
 Recommended topology:
 
 ```text
 Judge browser
   -> https://<edgeone-domain>/#/cockpit
-  -> EdgeOne Pages static React build
-  -> EdgeOne Pages Functions proxy /api/* and /health
+  -> EdgeOne Pages static frontend
+  -> VITE_API_ORIGIN=https://<backend-origin>
   -> public FastAPI backend such as Render, SAE, CVM, Lighthouse, or another Docker service
 ```
 
@@ -65,36 +64,16 @@ Build command: cd ui-new && npm run build
 Output directory: ui-new/dist
 ```
 
-Set this EdgeOne Pages environment variable:
+Set these EdgeOne Pages environment variables:
 
 ```text
 VITE_BASE_PATH=/
+VITE_API_ORIGIN=https://<backend-origin>
 ```
 
-This makes the generated frontend assets work from the EdgeOne root domain.
+Do not include a trailing slash in `VITE_API_ORIGIN`.
 
-## 3. Configure EdgeOne Functions Proxy
-
-This repository includes:
-
-```text
-functions/_proxy.js
-functions/api/[[default]].js
-functions/health.js
-```
-
-Set the EdgeOne Pages Functions environment variable:
-
-```text
-BACKEND_ORIGIN=https://<backend-origin>
-```
-
-Do not include a trailing slash.
-
-The proxy keeps the frontend code simple: React continues to request `/api/...`
-and `/health`, and EdgeOne forwards those requests to the FastAPI backend.
-
-## 4. Public Entry
+## 3. Public Entry
 
 Use the EdgeOne public URL as the competition URL:
 
@@ -104,15 +83,15 @@ https://<edgeone-domain>/#/cockpit
 
 Run this smoke test before sharing it:
 
-1. Open `https://<edgeone-domain>/health`.
-2. Confirm it returns backend health JSON.
-3. Open `https://<edgeone-domain>/#/cockpit`.
+1. Open `https://<backend-origin>/health` directly.
+2. Open `https://<edgeone-domain>/#/cockpit`.
+3. Confirm the top status/ticker can connect to the backend.
 4. Upload two PDFs.
 5. Start a job.
 6. Download PDF and Excel reports.
 
-If `/health` returns `BACKEND_ORIGIN is not configured`, the EdgeOne function
-environment variable has not been set or has not been redeployed.
+If the frontend opens but all API calls fail, check `VITE_API_ORIGIN` first. It
+must be the public backend origin, not the EdgeOne domain and not `127.0.0.1`.
 
-If `/health` works but job creation fails, inspect the backend logs first. The
-request has already passed through EdgeOne and reached FastAPI.
+If `VITE_API_ORIGIN` is correct but job creation still fails, inspect the
+FastAPI backend logs. At that point the request is reaching the backend service.

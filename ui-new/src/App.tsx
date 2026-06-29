@@ -206,6 +206,7 @@ type UploadErrors = {
 type UploadErrorField = keyof UploadErrors
 
 const DEFAULT_USER_LABEL = 'Chu, Stanley (SH/FS3)'
+const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/+$/, '')
 const EMPTY_UPLOAD: UploadState = {
   companyName: '',
   checkMode: 'ah',
@@ -224,8 +225,13 @@ function parseRoute(): Route {
   return { page: 'cockpit' }
 }
 
+function apiUrl(url: string): string {
+  if (!API_ORIGIN || /^https?:\/\//i.test(url)) return url
+  return `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const response = await fetch(apiUrl(url), init)
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`
     try {
@@ -237,6 +243,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(detail)
   }
   return response.json() as Promise<T>
+}
+
+function reportUrl(jobId: string, extension: 'pdf' | 'xlsx'): string {
+  return apiUrl(`/api/jobs/${encodeURIComponent(jobId)}/report.${extension}?template=latest`)
 }
 
 function textValue(value: unknown): string {
@@ -887,8 +897,8 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   }
   return (
     <div className="job-report-actions" aria-label="报告操作">
-      <a className="job-report-action-link" href={`/api/jobs/${job.job_id}/report.xlsx?template=latest`}>下载 Excel</a>
-      <a className="job-report-action-link" href={`/api/jobs/${job.job_id}/report.pdf?template=latest`}>下载 PDF</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'xlsx')}>下载 Excel</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}>下载 PDF</a>
       <a className="job-report-action-link" href="#/history">返回项目历史</a>
     </div>
   )

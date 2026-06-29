@@ -14,9 +14,6 @@ DOCKERIGNORE = ROOT / ".dockerignore"
 RENDER_YAML = ROOT / "render.yaml"
 START_COMPETITION = ROOT / "scripts" / "start_competition.ps1"
 README = ROOT / "README.md"
-EDGEONE_PROXY = ROOT / "functions" / "_proxy.js"
-EDGEONE_API_PROXY = ROOT / "functions" / "api" / "[[default]].js"
-EDGEONE_HEALTH_PROXY = ROOT / "functions" / "health.js"
 EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
 
 
@@ -612,8 +609,10 @@ def test_ui_new_job_detail_topbar_uses_report_actions_instead_of_page_title():
 def test_ui_new_download_links_bust_browser_cache_for_latest_reports():
     source = APP_TSX.read_text(encoding="utf-8")
 
-    assert "/report.xlsx?template=latest" in source
-    assert "/report.pdf?template=latest" in source
+    assert "function reportUrl(jobId: string, extension: 'pdf' | 'xlsx')" in source
+    assert "report.${extension}?template=latest" in source
+    assert "reportUrl(job.job_id, 'xlsx')" in source
+    assert "reportUrl(job.job_id, 'pdf')" in source
 
 
 def test_ui_new_is_served_from_root_and_static_legacy_moves_to_legacy_route():
@@ -632,35 +631,27 @@ def test_ui_new_is_served_from_root_and_static_legacy_moves_to_legacy_route():
 
 def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():
     vite_config = VITE_CONFIG.read_text(encoding="utf-8")
-    proxy = EDGEONE_PROXY.read_text(encoding="utf-8")
-    api_proxy = EDGEONE_API_PROXY.read_text(encoding="utf-8")
-    health_proxy = EDGEONE_HEALTH_PROXY.read_text(encoding="utf-8")
+    app_source = APP_TSX.read_text(encoding="utf-8")
     doc = EDGEONE_DOC.read_text(encoding="utf-8")
 
     assert "VITE_BASE_PATH" in vite_config
-    assert "BACKEND_ORIGIN" in proxy
-    assert "AHCC_BACKEND_ORIGIN" in proxy
-    assert "proxyToBackend" in proxy
-    assert "incomingUrl.pathname" in proxy
-    assert "incomingUrl.search" in proxy
-    assert "Access-Control-Allow-Origin" in proxy
-    assert "Access-Control-Allow-Methods" in proxy
-    assert "Cache-Control" in proxy
-    assert "no-store" in proxy
-    assert "export async function onRequest(context)" in api_proxy
-    assert "proxyToBackend(context.request, context.env)" in api_proxy
-    assert "export async function onRequest(context)" in health_proxy
-    assert "proxyToBackend(context.request, context.env)" in health_proxy
+    assert "VITE_API_ORIGIN" in app_source
+    assert "apiUrl(url)" in app_source
+    assert "reportUrl(" in app_source
+    assert "import.meta.env.VITE_API_ORIGIN" in app_source
 
     for token in (
         "Tencent EdgeOne Pages Deployment",
-        "static frontend plus edge proxy layer",
-        "BACKEND_ORIGIN=https://<backend-origin>",
+        "static frontend",
+        "VITE_API_ORIGIN=https://<backend-origin>",
         "VITE_BASE_PATH=/",
         "Output directory: ui-new/dist",
         "https://<edgeone-domain>/#/cockpit",
     ):
         assert token in doc
+
+    assert "functions/" not in doc
+    assert "BACKEND_ORIGIN" not in doc
 
 
 def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_origin():
