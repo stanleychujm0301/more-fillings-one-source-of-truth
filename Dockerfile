@@ -1,5 +1,5 @@
-ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-bookworm-slim
-ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim
+ARG NODE_IMAGE=node:22-bookworm-slim
+ARG PYTHON_IMAGE=python:3.12-slim
 
 FROM ${NODE_IMAGE} AS ui-builder
 
@@ -15,9 +15,9 @@ RUN npm run build
 
 FROM ${PYTHON_IMAGE} AS runtime
 
-ARG USE_ALIYUN_APT_MIRROR=1
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+ARG USE_ALIYUN_APT_MIRROR=0
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=pypi.org
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

@@ -21,6 +21,7 @@ ROOT_NPMRC = ROOT / ".npmrc"
 ROOT_NODE_VERSION = ROOT / ".node-version"
 ROOT_NVMRC = ROOT / ".nvmrc"
 EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
+ZEABUR_DOC = ROOT / "docs" / "zeabur_deployment.md"
 
 
 def test_ui_new_exposes_hash_routes_and_user_mode_api_hooks():
@@ -682,18 +683,18 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
     dockerignore = DOCKERIGNORE.read_text(encoding="utf-8")
 
     for token in (
-        "ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-bookworm-slim",
+        "ARG NODE_IMAGE=node:22-bookworm-slim",
         "FROM ${NODE_IMAGE} AS ui-builder",
         "ARG NPM_REGISTRY=https://registry.npmmirror.com",
         "COPY ui-new/package*.json ./ui-new/",
         "npm config set registry",
         "npm ci",
         "RUN npm run build",
-        "ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim",
+        "ARG PYTHON_IMAGE=python:3.12-slim",
         "FROM ${PYTHON_IMAGE} AS runtime",
-        "ARG USE_ALIYUN_APT_MIRROR=1",
+        "ARG USE_ALIYUN_APT_MIRROR=0",
         "mirrors.aliyun.com/debian",
-        "ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/",
+        "ARG PIP_INDEX_URL=https://pypi.org/simple",
         "poppler-utils",
         "ghostscript",
         "python -m pip install --upgrade pip",
@@ -712,6 +713,27 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
         "__pycache__/",
     ):
         assert token in dockerignore
+
+    assert "registry.cn-hangzhou.aliyuncs.com/library/node" not in dockerfile
+    assert "registry.cn-hangzhou.aliyuncs.com/library/python" not in dockerfile
+
+
+def test_zeabur_deployment_uses_full_stack_dockerfile_instead_of_static_node_build():
+    source = ZEABUR_DOC.read_text(encoding="utf-8")
+
+    for token in (
+        "Zeabur Deployment",
+        "Dockerfile",
+        "Full-stack Docker service",
+        "not a static site",
+        "PORT=8001",
+        "APP_ENV=production",
+        "DEEPSEEK_API_KEY",
+        "STORAGE_DIR=/var/data/storage",
+        "https://<zeabur-domain>/app#/cockpit",
+        "/health",
+    ):
+        assert token in source
 
 
 def test_render_blueprint_exposes_public_full_stack_entry_with_health_check():
