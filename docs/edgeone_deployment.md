@@ -59,8 +59,8 @@ Use these build settings:
 ```text
 Framework preset: Vite or Other
 Root directory: /
-Install command: cd ui-new && npm ci
-Build command: cd ui-new && npm run build
+Install command: npm run install:ui
+Build command: npm run build
 Output directory: ui-new/dist
 ```
 

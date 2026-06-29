@@ -1,0 +1,11 @@
+{
+  "name": "more-fillings-one-source-of-truth",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "install:ui": "npm --prefix ui-new ci",
+    "build": "npm --prefix ui-new run build",
+    "dev": "npm --prefix ui-new run dev",
+    "preview": "npm --prefix ui-new run preview"
+  }
+}

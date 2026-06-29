@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -14,6 +15,7 @@ DOCKERIGNORE = ROOT / ".dockerignore"
 RENDER_YAML = ROOT / "render.yaml"
 START_COMPETITION = ROOT / "scripts" / "start_competition.ps1"
 README = ROOT / "README.md"
+ROOT_PACKAGE_JSON = ROOT / "package.json"
 EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
 
 
@@ -633,18 +635,24 @@ def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():
     vite_config = VITE_CONFIG.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")
     doc = EDGEONE_DOC.read_text(encoding="utf-8")
+    root_package = json.loads(ROOT_PACKAGE_JSON.read_text(encoding="utf-8"))
 
     assert "VITE_BASE_PATH" in vite_config
     assert "VITE_API_ORIGIN" in app_source
     assert "apiUrl(url)" in app_source
     assert "reportUrl(" in app_source
     assert "import.meta.env.VITE_API_ORIGIN" in app_source
+    assert root_package["private"] is True
+    assert root_package["scripts"]["install:ui"] == "npm --prefix ui-new ci"
+    assert root_package["scripts"]["build"] == "npm --prefix ui-new run build"
 
     for token in (
         "Tencent EdgeOne Pages Deployment",
         "static frontend",
         "VITE_API_ORIGIN=https://<backend-origin>",
         "VITE_BASE_PATH=/",
+        "Install command: npm run install:ui",
+        "Build command: npm run build",
         "Output directory: ui-new/dist",
         "https://<edgeone-domain>/#/cockpit",
     ):
