@@ -631,14 +631,14 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
     dockerignore = DOCKERIGNORE.read_text(encoding="utf-8")
 
     for token in (
-        "ARG NODE_IMAGE=node:22-bookworm-slim",
+        "ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-bookworm-slim",
         "FROM ${NODE_IMAGE} AS ui-builder",
         "ARG NPM_REGISTRY=https://registry.npmmirror.com",
         "COPY ui-new/package*.json ./ui-new/",
         "npm config set registry",
         "npm ci",
         "RUN npm run build",
-        "ARG PYTHON_IMAGE=python:3.12-slim",
+        "ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim",
         "FROM ${PYTHON_IMAGE} AS runtime",
         "ARG USE_ALIYUN_APT_MIRROR=1",
         "mirrors.aliyun.com/debian",

@@ -1,5 +1,5 @@
-ARG NODE_IMAGE=node:22-bookworm-slim
-ARG PYTHON_IMAGE=python:3.12-slim
+ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-bookworm-slim
+ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim
 
 FROM ${NODE_IMAGE} AS ui-builder
 
