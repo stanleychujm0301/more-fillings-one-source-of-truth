@@ -28,7 +28,7 @@ Use these deployment settings:
 Service type: Dockerfile / Docker
 Dockerfile path: Dockerfile
 Root directory: /
-Port: 8001
+Port: 8080
 ```
 
 If Zeabur offers multiple detected project types, choose Dockerfile instead of
@@ -40,7 +40,7 @@ deployment compatibility, but Zeabur should run the full-stack Dockerfile.
 Set these variables in Zeabur:
 
 ```text
-PORT=8001
+PORT=8080
 APP_ENV=production
 PYTHONUTF8=1
 DEEPSEEK_API_KEY=<your real key>
@@ -95,5 +95,5 @@ NODE_IMAGE=node:22-bookworm-slim
 PYTHON_IMAGE=python:3.12-slim
 ```
 
-If Zeabur deploys successfully but the page returns 404, confirm the service
-uses port `8001` and that `/health` responds first.
+If Zeabur returns 502, confirm the service exposes port `8080`, the container
+is healthy, and `/health` responds first.

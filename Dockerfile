@@ -22,7 +22,7 @@ ARG PIP_TRUSTED_HOST=pypi.org
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONUTF8=1
-ENV PORT=8001
+ENV PORT=8080
 ENV APP_ENV=production
 ENV STORAGE_DIR=/var/data/storage
 ENV SQLITE_PATH=/var/data/storage/ahcc.db
@@ -59,6 +59,6 @@ RUN python -m pip install --upgrade pip -i "${PIP_INDEX_URL}" --trusted-host "${
     && python -m pip install --no-cache-dir -e . -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
     && mkdir -p /var/data/storage
 
-EXPOSE 8001
+EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn ahcc.api.main:app --host 0.0.0.0 --port ${PORT:-8001}"]
+CMD ["sh", "-c", "uvicorn ahcc.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

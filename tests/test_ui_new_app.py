@@ -709,8 +709,9 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
         "ghostscript",
         "python -m pip install --upgrade pip",
         "COPY --from=ui-builder /app/ui-new/dist ./ui-new/dist",
-        "ENV PORT=8001",
-        'CMD ["sh", "-c", "uvicorn ahcc.api.main:app --host 0.0.0.0 --port ${PORT:-8001}"]',
+        "ENV PORT=8080",
+        "EXPOSE 8080",
+        'CMD ["sh", "-c", "uvicorn ahcc.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]',
     ):
         assert token in dockerfile
 
@@ -736,7 +737,7 @@ def test_zeabur_deployment_uses_full_stack_dockerfile_instead_of_static_node_bui
         "Dockerfile",
         "Full-stack Docker service",
         "not a static site",
-        "PORT=8001",
+        "PORT=8080",
         "APP_ENV=production",
         "DEEPSEEK_API_KEY",
         "STORAGE_DIR=/var/data/storage",
