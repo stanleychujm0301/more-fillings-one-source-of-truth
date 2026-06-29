@@ -40,8 +40,9 @@ class Orchestrator:
         company_name: str | None = None,
         check_mode: str = "ah",
         bilingual_level: str = "fast",
+        job: Job | None = None,
     ) -> Job:
-        job = Job(
+        job = job or Job(
             job_id=str(uuid.uuid4())[:8],
             company_name=company_name,
             check_mode=check_mode,

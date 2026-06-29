@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from ahcc.api import main as api_main
 from ahcc.api import routes_job
 from ahcc.config import settings
-from ahcc.schemas import Job
+from ahcc.schemas import Job, JobStatus
 from ahcc.storage import models, repository
 
 
@@ -138,6 +138,69 @@ def test_create_job_trims_company_name_and_passes_it_to_orchestrator(monkeypatch
     assert captured["bilingual_level"] == "fast"
 
 
+def test_create_job_returns_pending_job_and_schedules_background_run(monkeypatch, workspace_tmp):
+    scheduled: list[object] = []
+    saved: list[Job] = []
+
+    class _ScheduledTask:
+        def __init__(self, coro):
+            self.coro = coro
+            coro.close()
+
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(routes_job.settings, "storage_dir", workspace_tmp)
+    monkeypatch.setattr(routes_job, "save_job", saved.append)
+    monkeypatch.setattr(
+        routes_job.asyncio,
+        "create_task",
+        lambda coro: scheduled.append(_ScheduledTask(coro)) or scheduled[-1],
+    )
+
+    with TestClient(api_main.app) as client:
+        response = client.post(
+            "/api/jobs/",
+            data={"company_name": "  Render Demo  ", "check_mode": "ah"},
+            files={
+                "a_file": ("a.pdf", b"%PDF-a", "application/pdf"),
+                "h_file": ("h.pdf", b"%PDF-h", "application/pdf"),
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "pending"
+    assert payload["company_name"] == "Render Demo"
+    assert payload["job_id"]
+    assert len(saved) == 1
+    assert saved[0].job_id == payload["job_id"]
+    assert saved[0].status == JobStatus.PENDING
+    assert scheduled
+
+
+@pytest.mark.asyncio
+async def test_background_run_reuses_queued_job_id_and_saves_final_job(monkeypatch):
+    saved: list[Job] = []
+    captured: dict[str, str | None] = {}
+    queued = Job(
+        job_id="queued-1",
+        company_name="Queued Project",
+        check_mode="h_bilingual",
+        a_file="zh.pdf",
+        h_file="en.pdf",
+    )
+
+    monkeypatch.setattr(routes_job, "save_job", saved.append)
+    monkeypatch.setattr(routes_job, "Orchestrator", lambda: _FakeOrchestrator(captured))
+
+    await routes_job._run_job_background(queued, bilingual_level="strict")
+
+    assert captured["job_id"] == "queued-1"
+    assert captured["company_name"] == "Queued Project"
+    assert captured["check_mode"] == "h_bilingual"
+    assert captured["bilingual_level"] == "strict"
+    assert saved[-1].job_id == "queued-1"
+
+
 def test_create_job_passes_strict_bilingual_level(monkeypatch, workspace_tmp):
     captured: dict[str, str | None] = {}
 
@@ -199,12 +262,14 @@ class _FakeOrchestrator:
         company_name: str | None = None,
         check_mode: str = "ah",
         bilingual_level: str = "fast",
+        job: Job | None = None,
     ) -> Job:
         self._captured["company_name"] = company_name
         self._captured["check_mode"] = check_mode
         self._captured["bilingual_level"] = bilingual_level
+        self._captured["job_id"] = job.job_id if job else None
         return Job(
-            job_id="j-api",
+            job_id=job.job_id if job else "j-api",
             company_name=company_name,
             check_mode=check_mode,
             a_file=a_file,

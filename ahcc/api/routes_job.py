@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,7 +16,7 @@ from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
 from ahcc.report.excel import export_excel
 from ahcc.report.pdf import export_pdf
-from ahcc.schemas import Diff, Job
+from ahcc.schemas import Diff, Job, JobStatus
 from ahcc.storage.repository import apply_current_user_context, get_diffs, get_job, list_jobs, save_job
 
 router = APIRouter()
@@ -54,27 +56,56 @@ async def create_job(
     upload_dir = settings.storage_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
+    job_id = uuid4().hex[:8]
     a_prefix, h_prefix = ("H_ZH", "H_EN") if normalized_check_mode == "h_bilingual" else ("A", "H")
     # 只取文件名部分，剥离任何目录成分，防止 ../ 之类的路径穿越写出 upload_dir 之外
     a_name = Path(a_file.filename or "a.pdf").name
     h_name = Path(h_file.filename or "h.pdf").name
-    a_path = upload_dir / f"{a_prefix}_{a_name}"
-    h_path = upload_dir / f"{h_prefix}_{h_name}"
+    a_path = upload_dir / f"{job_id}_{a_prefix}_{a_name}"
+    h_path = upload_dir / f"{job_id}_{h_prefix}_{h_name}"
     with a_path.open("wb") as f:
         shutil.copyfileobj(a_file.file, f)
     with h_path.open("wb") as f:
         shutil.copyfileobj(h_file.file, f)
 
-    job = await Orchestrator().run(
-        str(a_path),
-        str(h_path),
-        normalized_company_name,
-        normalized_check_mode,
-        bilingual_level=normalized_bilingual_level,
+    job = apply_current_user_context(
+        Job(
+            job_id=job_id,
+            company_name=normalized_company_name,
+            check_mode=normalized_check_mode,
+            a_file=str(a_path),
+            h_file=str(h_path),
+            status=JobStatus.PENDING,
+        )
     )
-    job = apply_current_user_context(job)
     save_job(job)
+    asyncio.create_task(_run_job_background(job, bilingual_level=normalized_bilingual_level))
     return job
+
+
+async def _run_job_background(job: Job, *, bilingual_level: str = "fast") -> None:
+    try:
+        completed = await Orchestrator().run(
+            job.a_file,
+            job.h_file,
+            job.company_name,
+            job.check_mode,
+            bilingual_level=bilingual_level,
+            job=job,
+        )
+        save_job(apply_current_user_context(completed))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"[{job.job_id}] background job failed")
+        finished_at = datetime.utcnow()
+        failed = job.model_copy(
+            update={
+                "status": JobStatus.FAILED,
+                "finished_at": finished_at,
+                "duration_seconds": (finished_at - job.started_at).total_seconds(),
+                "error": str(exc),
+            }
+        )
+        save_job(apply_current_user_context(failed))
 
 
 @router.get("/{job_id}/diffs", response_model=list[Diff])

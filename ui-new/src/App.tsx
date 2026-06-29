@@ -33,6 +33,8 @@ type HealthPayload = {
   result_version?: string | number | null
 }
 
+const JOB_REFRESH_STATUSES = new Set(['pending', 'parsing', 'profiling', 'checking', 'reporting'])
+
 type JobSummary = {
   job_id: string
   company_name?: string | null
@@ -527,6 +529,10 @@ function filteredDiffs(diffs: DiffItem[], scope: DiffScope): DiffItem[] {
   return diffs.filter((diff) => (diff.triage || 'real') === scope)
 }
 
+function shouldRefreshJob(job: JobDetail | null): boolean {
+  return Boolean(job?.status && JOB_REFRESH_STATUSES.has(job.status))
+}
+
 function diffScopeCount(diffs: DiffItem[], scope: DiffScope, coverageCount: number): number {
   if (scope === 'all') return diffs.length
   if (scope === 'coverage') return coverageCount
@@ -625,6 +631,14 @@ function App() {
       loadJob(route.jobId).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
     }
   }, [loadJob, route])
+
+  useEffect(() => {
+    if (route.page !== 'job' || !route.jobId || !shouldRefreshJob(job)) return
+    const intervalId = window.setInterval(() => {
+      loadJob(route.jobId).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+    }, 2500)
+    return () => window.clearInterval(intervalId)
+  }, [job?.status, loadJob, route.jobId, route.page])
 
   const clearValidationTimeout = useCallback(() => {
     if (validationTimeoutRef.current !== null) {
@@ -858,6 +872,15 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
       <div className="job-report-actions" aria-label="报告操作">
         <span className="job-report-action-link disabled" aria-disabled="true">下载 Excel</span>
         <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
+        <a className="job-report-action-link" href="#/history">返回项目历史</a>
+      </div>
+    )
+  }
+  if (job.status !== 'done') {
+    return (
+      <div className="job-report-actions" aria-label="报告操作">
+        <span className="job-report-action-link disabled" aria-disabled="true">等待 Excel</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">等待 PDF</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
     )

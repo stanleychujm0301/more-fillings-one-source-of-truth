@@ -31,6 +31,20 @@ def test_ui_new_exposes_hash_routes_and_user_mode_api_hooks():
         assert endpoint in source
 
 
+def test_ui_new_job_detail_polls_until_background_job_finishes():
+    source = APP_TSX.read_text(encoding="utf-8")
+
+    for token in (
+        "JOB_REFRESH_STATUSES",
+        "job?.status && JOB_REFRESH_STATUSES.has(job.status)",
+        "window.setInterval",
+        "window.clearInterval",
+        "loadJob(route.jobId)",
+        "job.status !== 'done'",
+    ):
+        assert token in source
+
+
 def test_ui_new_browser_title_uses_competition_project_name():
     source = UI_NEW_INDEX.read_text(encoding="utf-8")
 
