@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_TSX = ROOT / "ui-new" / "src" / "App.tsx"
 APP_CSS = ROOT / "ui-new" / "src" / "App.css"
 VITE_CONFIG = ROOT / "ui-new" / "vite.config.ts"
+UI_NEW_INDEX = ROOT / "ui-new" / "index.html"
 API_MAIN = ROOT / "ahcc" / "api" / "main.py"
 DOCKERFILE = ROOT / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
@@ -28,6 +29,13 @@ def test_ui_new_exposes_hash_routes_and_user_mode_api_hooks():
         "/api/users/current/avatar",
     ):
         assert endpoint in source
+
+
+def test_ui_new_browser_title_uses_competition_project_name():
+    source = UI_NEW_INDEX.read_text(encoding="utf-8")
+
+    assert "<title>more_fillings_one_source_of_truth</title>" in source
+    assert "<title>ui-new</title>" not in source
 
 
 def test_ui_new_header_keeps_kpmg_logo_and_one_source_of_truth_tagline():
