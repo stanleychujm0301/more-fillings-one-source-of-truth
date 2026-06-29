@@ -59,9 +59,10 @@ Use these build settings:
 ```text
 Framework preset: Vite or Other
 Root directory: /
-Install command: npm run install:ui
+Install command: npm ci
 Build command: npm run build
 Output directory: ui-new/dist
+Node version: 20 or 22
 ```
 
 Set these EdgeOne Pages environment variables:
@@ -69,6 +70,7 @@ Set these EdgeOne Pages environment variables:
 ```text
 VITE_BASE_PATH=/
 VITE_API_ORIGIN=https://<backend-origin>
+NODE_VERSION=20
 ```
 
 Do not include a trailing slash in `VITE_API_ORIGIN`.
