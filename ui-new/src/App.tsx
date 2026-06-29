@@ -49,6 +49,13 @@ type JobSummary = {
   comparison_summary?: Record<string, unknown>
 }
 
+type JobProgressPayload = {
+  stage?: string | null
+  percent?: number | null
+  message?: string | null
+  updated_at?: string | null
+}
+
 type EvidenceItem = {
   side?: string
   page?: number
@@ -177,6 +184,7 @@ type JobDetail = JobSummary & {
   a_file?: string
   h_file?: string
   error?: string | null
+  progress?: JobProgressPayload[]
   profile_a?: ProfilePayload | null
   profile_h?: ProfilePayload | null
   coverage_items?: unknown[]
@@ -501,6 +509,19 @@ function auditConclusion(job: JobDetail, diffs: DiffItem[]) {
   const blocking = summaryNumber(summary, 'blocking_warning_count') || summaryNumber(summary, 'core_warning_count')
   const auxiliary = summaryNumber(summary, 'aux_warning_count')
   const evidenceItems = diffs.filter((diff) => (diff.evidence || []).length > 0).length
+  if (shouldRefreshJob(job)) {
+    const current = latestProgress(job)
+    const progressText = current?.percent !== null && current?.percent !== undefined ? ` · ${current.percent}%` : ''
+    return {
+      tone: 'running',
+      title: '核查任务正在执行',
+      copy: `${current?.message || '后端正在解析报告、提取画像并生成证据链'}${progressText}`,
+      pill: '蓝色 · 进行中',
+      evidenceItems,
+      blocking,
+      auxiliary,
+    }
+  }
   if (job.status === 'failed') {
     return {
       tone: 'failed',
@@ -541,6 +562,11 @@ function filteredDiffs(diffs: DiffItem[], scope: DiffScope): DiffItem[] {
 
 function shouldRefreshJob(job: JobDetail | null): boolean {
   return Boolean(job?.status && JOB_REFRESH_STATUSES.has(job.status))
+}
+
+function latestProgress(job: JobDetail): JobProgressPayload | null {
+  const progress = job.progress || []
+  return progress.length ? progress[progress.length - 1] : null
 }
 
 function diffScopeCount(diffs: DiffItem[], scope: DiffScope, coverageCount: number): number {

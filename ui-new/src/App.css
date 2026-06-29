@@ -2381,6 +2381,10 @@ body {
   border-left-color: #16a34a;
 }
 
+.audit-conclusion-strip.running {
+  border-left-color: #00a3e0;
+}
+
 .audit-conclusion-strip.failed {
   border-left-color: #9a3412;
 }
@@ -2481,6 +2485,12 @@ body {
   color: #166534;
   border-color: rgba(22, 101, 52, 0.14);
   background: rgba(220, 252, 231, 0.88);
+}
+
+.audit-pill.running {
+  color: #075985;
+  border-color: rgba(0, 163, 224, 0.18);
+  background: rgba(224, 242, 254, 0.9);
 }
 
 .audit-pill.failed {

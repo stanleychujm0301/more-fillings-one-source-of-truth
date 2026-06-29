@@ -41,6 +41,7 @@ def test_ui_new_exposes_hash_routes_and_user_mode_api_hooks():
 
 def test_ui_new_job_detail_polls_until_background_job_finishes():
     source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
 
     for token in (
         "JOB_REFRESH_STATUSES",
@@ -49,8 +50,17 @@ def test_ui_new_job_detail_polls_until_background_job_finishes():
         "window.clearInterval",
         "loadJob(route.jobId)",
         "job.status !== 'done'",
+        "type JobProgressPayload",
+        "progress?: JobProgressPayload[]",
+        "shouldRefreshJob(job)",
+        "latestProgress(job)",
+        "核查任务正在执行",
+        "蓝色 · 进行中",
     ):
         assert token in source
+
+    assert ".audit-conclusion-strip.running" in css
+    assert ".audit-pill.running" in css
 
 
 def test_ui_new_browser_title_uses_competition_project_name():
