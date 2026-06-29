@@ -404,6 +404,12 @@ function diffRatio(aValue: unknown, hValue: unknown): string {
   return `${(Math.abs((h - a) / Math.abs(a)) * 100).toFixed(2)}%`
 }
 
+function formatRatio(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const normalized = value > 1 ? value / 100 : value
+  return `${(normalized * 100).toFixed(1)}%`
+}
+
 function bboxText(bbox?: [number, number, number, number] | null): string {
   if (!bbox?.length) return '无坐标'
   return bbox.map((value) => Number(value).toFixed(1)).join(', ')
@@ -453,6 +459,10 @@ type DiffScope = 'all' | 'real' | 'unresolved' | 'expected' | 'coverage'
 
 function summaryNumber(summary: Record<string, unknown>, key: string): number {
   return numericValue(summary[key]) ?? 0
+}
+
+function hasSummaryKey(summary: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(summary, key)
 }
 
 function formatDuration(seconds?: number | null): string {
@@ -1292,6 +1302,10 @@ function JobDetailPage({
         />
       </div>
 
+      {job.check_mode !== 'h_bilingual' && (
+        <BranchDiagnosticsPanel summary={summary} labels={labels} />
+      )}
+
       {job.check_mode !== 'h_bilingual' ? (
         <div className="profile-showcase">
           <ProfileCard title="A 股画像" sideLabel={labels.a} profile={job.profile_a} />
@@ -1376,6 +1390,83 @@ function JobDetailPage({
             }) : <EmptyState label="暂无差异" />}
           </div>
         )}
+      </div>
+    </section>
+  )
+}
+
+function BranchDiagnosticsPanel({
+  summary,
+  labels,
+}: {
+  summary: Record<string, unknown>
+  labels: { a: string; h: string; factLabel: string }
+}) {
+  const sourceRecorded = hasSummaryKey(summary, 'branch_source_doc_available')
+  const sourceAvailable = summary.branch_source_doc_available === true
+  const aBranchCount = summaryNumber(summary, 'a_branch_count')
+  const hBranchCount = summaryNumber(summary, 'h_branch_count')
+  const matchedBranchCount = summaryNumber(summary, 'matched_branch_count')
+  const branchDiffCount = summaryNumber(summary, 'branch_diff_count')
+  const branchAlignmentRatio = summaryNumber(summary, 'branch_alignment_ratio')
+  const hasDiagnostics = [
+    'branch_source_doc_available',
+    'a_branch_count',
+    'h_branch_count',
+    'matched_branch_count',
+    'branch_diff_count',
+    'branch_alignment_ratio',
+  ].some((key) => hasSummaryKey(summary, key))
+
+  let note = '当前结果未包含分支机构诊断字段，建议用最新引擎重新生成任务。'
+  if (hasDiagnostics) {
+    if (sourceRecorded && !sourceAvailable) {
+      note = '分支机构源文档未进入披露检查，系统未输出分支机构真实差异。'
+    } else if (!aBranchCount || !hBranchCount) {
+      note = '未稳定提取到两侧分支机构表，系统保守跳过分支机构真实差异。'
+    } else if (!matchedBranchCount) {
+      note = '未匹配到同名分支机构，系统保守跳过分支机构真实差异。'
+    } else if (branchAlignmentRatio && branchAlignmentRatio < 0.8) {
+      note = `分支机构匹配比例 ${formatRatio(summaryNumber(summary, 'branch_alignment_ratio'))}，低于真实差异输出门槛。`
+    } else if (branchDiffCount) {
+      note = `已稳定匹配 ${matchedBranchCount} 家分支机构，输出 ${branchDiffCount} 条分支机构资产规模真实差异。`
+    } else {
+      note = `已稳定匹配 ${matchedBranchCount} 家分支机构，未发现资产规模真实差异。`
+    }
+  }
+
+  return (
+    <section className={`branch-diagnostics-panel ${branchDiffCount ? 'has-diff' : ''}`}>
+      <div className="branch-diagnostics-copy">
+        <p className="eyebrow">Branch Disclosure Diagnostics</p>
+        <h3>分支机构披露检查</h3>
+        <p className="branch-diagnostics-note">{note}</p>
+      </div>
+      <div className="branch-diagnostics-grid" aria-label="分支机构披露诊断">
+        <div className="branch-diagnostics-card">
+          <span>源文档</span>
+          <strong>{sourceRecorded ? (sourceAvailable ? '已接入' : '缺失') : '未记录'}</strong>
+        </div>
+        <div className="branch-diagnostics-card">
+          <span>{labels.a} 分支</span>
+          <strong>{valueText(aBranchCount)}</strong>
+        </div>
+        <div className="branch-diagnostics-card">
+          <span>{labels.h} 分支</span>
+          <strong>{valueText(hBranchCount)}</strong>
+        </div>
+        <div className="branch-diagnostics-card">
+          <span>稳定匹配</span>
+          <strong>{valueText(matchedBranchCount)}</strong>
+        </div>
+        <div className="branch-diagnostics-card">
+          <span>对齐率</span>
+          <strong>{formatRatio(summaryNumber(summary, 'branch_alignment_ratio'))}</strong>
+        </div>
+        <div className="branch-diagnostics-card emphasis">
+          <span>分支真实差异</span>
+          <strong>{valueText(branchDiffCount)}</strong>
+        </div>
       </div>
     </section>
   )

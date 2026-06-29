@@ -2548,6 +2548,88 @@ body {
   border-left-color: #00a3e0;
 }
 
+.branch-diagnostics-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.58fr) minmax(0, 1.42fr);
+  gap: 14px;
+  align-items: stretch;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  border-left: 3px solid rgba(0, 51, 141, 0.42);
+  border-radius: var(--surface-radius);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(248, 251, 255, 0.78)),
+    radial-gradient(circle at 100% 0%, rgba(0, 163, 224, 0.08), transparent 18rem);
+  box-shadow: var(--soft-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.branch-diagnostics-panel.has-diff {
+  border-left-color: #dc2626;
+}
+
+.branch-diagnostics-copy {
+  min-width: 0;
+}
+
+.branch-diagnostics-copy h3 {
+  margin: 5px 0 8px;
+  color: #0d1520;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 840;
+}
+
+.branch-diagnostics-note {
+  max-width: 54ch;
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.branch-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.branch-diagnostics-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 10px;
+  border: 1px solid rgba(18, 38, 63, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.branch-diagnostics-card span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-diagnostics-card strong {
+  overflow-wrap: anywhere;
+  color: #0d1520;
+  font-size: 20px;
+  line-height: 1.05;
+  font-weight: 860;
+}
+
+.branch-diagnostics-card.emphasis {
+  border-color: rgba(220, 38, 38, 0.14);
+  background: rgba(255, 247, 247, 0.86);
+}
+
+.branch-diagnostics-card.emphasis strong {
+  color: #b91c1c;
+}
+
 .profile-showcase {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3417,6 +3499,14 @@ label input:focus {
   .detail-kpi-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .branch-diagnostics-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .branch-diagnostics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -3476,6 +3566,14 @@ label input:focus {
   .detail-kpi-grid {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .branch-diagnostics-panel {
+    padding: 16px;
+  }
+
+  .branch-diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .audit-project-title {

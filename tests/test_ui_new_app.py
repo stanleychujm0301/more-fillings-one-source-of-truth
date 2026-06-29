@@ -670,6 +670,32 @@ def test_health_endpoint_exposes_storage_persistence_diagnostics():
         assert token in api_main
 
 
+def test_ui_new_job_detail_surfaces_branch_disclosure_diagnostics():
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        "BranchDiagnosticsPanel",
+        "branch_source_doc_available",
+        "a_branch_count",
+        "h_branch_count",
+        "matched_branch_count",
+        "branch_diff_count",
+        "branch_alignment_ratio",
+        "summaryNumber(summary, 'branch_diff_count')",
+        "summaryNumber(summary, 'branch_alignment_ratio')",
+    ):
+        assert token in source
+
+    for token in (
+        ".branch-diagnostics-panel",
+        ".branch-diagnostics-grid",
+        ".branch-diagnostics-card",
+        ".branch-diagnostics-note",
+    ):
+        assert token in css
+
+
 def test_backend_declares_opencc_for_deployment_parity():
     pyproject = PYPROJECT.read_text(encoding="utf-8")
 
