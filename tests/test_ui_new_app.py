@@ -696,6 +696,33 @@ def test_ui_new_job_detail_surfaces_branch_disclosure_diagnostics():
         assert token in css
 
 
+def test_ui_new_job_detail_handles_missing_zeabur_job_with_latest_done_fallback():
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        "MissingJobFallback",
+        "fetchLatestCompletedJob",
+        "redirectToLatestJob",
+        "latestRecoverableJob",
+        "jobLoadError",
+        "/api/jobs/history?scope=project&limit=30",
+        "item.status === 'done'",
+        "window.location.hash = `#/jobs/${latest.job_id}`",
+        "原任务不在当前环境，已打开最新完成任务",
+        "任务不在当前环境存储中",
+        "打开最新完成任务",
+    ):
+        assert token in source
+
+    for token in (
+        ".missing-job-panel",
+        ".missing-job-actions",
+        ".missing-job-latest",
+    ):
+        assert token in css
+
+
 def test_backend_declares_opencc_for_deployment_parity():
     pyproject = PYPROJECT.read_text(encoding="utf-8")
 

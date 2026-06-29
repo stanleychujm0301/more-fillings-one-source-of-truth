@@ -600,6 +600,8 @@ function App() {
   const [history, setHistory] = useState<JobSummary[]>([])
   const [historyScope, setHistoryScope] = useState<'project' | 'mine'>('project')
   const [job, setJob] = useState<JobDetail | null>(null)
+  const [jobLoadError, setJobLoadError] = useState<string | null>(null)
+  const [latestRecoverableJob, setLatestRecoverableJob] = useState<JobSummary | null>(null)
   const [activeDiff, setActiveDiff] = useState<DiffItem | null>(null)
   const [upload, setUpload] = useState<UploadState>(EMPTY_UPLOAD)
   const [uploadErrors, setUploadErrors] = useState<UploadErrors>({})
@@ -646,6 +648,33 @@ function App() {
     setJob(payload)
   }, [])
 
+  const fetchLatestCompletedJob = useCallback(async () => {
+    const payload = await fetchJson<JobSummary[]>('/api/jobs/history?scope=project&limit=30')
+    return (
+      payload.find((item) => item.status === 'done' && item.check_mode === 'ah') ||
+      payload.find((item) => item.status === 'done') ||
+      null
+    )
+  }, [])
+
+  const redirectToLatestJob = useCallback((missingJobId: string, latest: JobSummary | null) => {
+    if (!latest?.job_id || latest.job_id === missingJobId) return false
+    setMessage(`原任务不在当前环境，已打开最新完成任务 ${latest.job_id}`)
+    window.location.hash = `#/jobs/${latest.job_id}`
+    return true
+  }, [])
+
+  const handleMissingJob = useCallback(async (jobId: string, detail: string) => {
+    setJobLoadError(`任务不在当前环境存储中：${detail}`)
+    try {
+      const latest = await fetchLatestCompletedJob()
+      setLatestRecoverableJob(latest)
+      redirectToLatestJob(jobId, latest)
+    } catch {
+      setLatestRecoverableJob(null)
+    }
+  }, [fetchLatestCompletedJob, redirectToLatestJob])
+
   useEffect(() => {
     if (!window.location.hash) {
       window.location.hash = '#/cockpit'
@@ -674,9 +703,19 @@ function App() {
   useEffect(() => {
     if (route.page === 'job' && route.jobId) {
       setJob(null)
-      loadJob(route.jobId).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      setJobLoadError(null)
+      setLatestRecoverableJob(null)
+      loadJob(route.jobId).catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err)
+        if (/job not found|404/i.test(detail)) {
+          handleMissingJob(route.jobId || '', detail)
+          return
+        }
+        setJobLoadError(detail)
+        setError(detail)
+      })
     }
-  }, [loadJob, route])
+  }, [handleMissingJob, loadJob, route])
 
   useEffect(() => {
     if (route.page !== 'job' || !route.jobId || !shouldRefreshJob(job)) return
@@ -883,7 +922,15 @@ function App() {
         )}
 
         {route.page === 'job' && (
-          <JobDetailPage job={job} setActiveDiff={setActiveDiff} />
+          jobLoadError && !job ? (
+            <MissingJobFallback
+              jobId={route.jobId || ''}
+              latestJob={latestRecoverableJob}
+              detail={jobLoadError}
+            />
+          ) : (
+            <JobDetailPage job={job} setActiveDiff={setActiveDiff} />
+          )
         )}
 
         {route.page === 'profile' && (
@@ -1204,6 +1251,50 @@ function HistoryPage({
           <span>核查耗时</span>
         </div>
         {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : <EmptyState label="暂无项目历史" />}
+      </div>
+    </section>
+  )
+}
+
+function MissingJobFallback({
+  jobId,
+  latestJob,
+  detail,
+}: {
+  jobId: string
+  latestJob: JobSummary | null
+  detail: string
+}) {
+  return (
+    <section className="missing-job-panel">
+      <div>
+        <p className="eyebrow">Job Recovery</p>
+        <h2>任务不在当前环境存储中</h2>
+        <p>
+          任务 {jobId || '—'} 未在当前 Zeabur 存储中找到。通常是部署重建前没有挂载持久化卷，
+          旧 SQLite 或上传 PDF 已丢失；新任务会使用当前线上引擎重新生成结果。
+        </p>
+        <small>{detail}</small>
+      </div>
+      {latestJob ? (
+        <div className="missing-job-latest">
+          <span>最新完成任务</span>
+          <strong>{latestJob.company_name || latestJob.job_id}</strong>
+          <small>{modeLabel(latestJob.check_mode)} · {formatDate(latestJob.finished_at || latestJob.started_at)}</small>
+        </div>
+      ) : (
+        <div className="missing-job-latest">
+          <span>最新完成任务</span>
+          <strong>暂无可恢复任务</strong>
+          <small>请重新上传同一组 PDF 生成新任务。</small>
+        </div>
+      )}
+      <div className="missing-job-actions">
+        {latestJob && (
+          <a className="primary" href={`#/jobs/${latestJob.job_id}`}>打开最新完成任务</a>
+        )}
+        <a className="ghost" href="#/cockpit">重新上传 PDF</a>
+        <a className="ghost" href="#/history">查看项目历史</a>
       </div>
     </section>
   )
