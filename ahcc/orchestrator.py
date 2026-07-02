@@ -432,11 +432,13 @@ class Orchestrator:
     async def _build_report(self, job: Job) -> None:
         """报告导出 — P3 实现。"""
         from ahcc.report.excel import export_excel
+        from ahcc.report.html import export_html
         from ahcc.report.pdf import export_pdf
         out_dir = settings.storage_dir / "jobs" / job.job_id
         out_dir.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(export_excel, job, out_dir / "report.xlsx")
         await asyncio.to_thread(export_pdf, job, out_dir / "report.pdf")
+        await asyncio.to_thread(export_html, job, out_dir / "report.html")
 
     def _normalize_bilingual_coverage_items(self, items: list[Any]) -> list[DisclosureCoverageItem]:
         normalized: list[DisclosureCoverageItem] = []
@@ -900,6 +902,7 @@ class Orchestrator:
             "internal_inconsistency_count": sum(1 for d in job.diffs if d.diff_type.value == "internal"),
             "key_metric_exact_diff_count": sum(1 for d in job.diffs if d.rule_id == "key_metric_exact_mismatch"),
             "visual_text_layer_mismatch_count": sum(1 for d in job.diffs if d.rule_id == "visual_text_layer_mismatch"),
+            "text_overlay_tamper_count": sum(1 for d in job.diffs if d.rule_id == "text_overlay_tamper"),
             "internal_event_diff_count": sum(1 for d in job.diffs if d.rule_id == "event_internal_fact_match"),
             "diff_scope_counts": diff_scope_counts,
             "cross_report_diff_count": sum(

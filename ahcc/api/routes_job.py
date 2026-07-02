@@ -21,6 +21,7 @@ from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
 from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION
 from ahcc.report.excel import export_excel
+from ahcc.report.html import export_html
 from ahcc.report.pdf import export_pdf
 from ahcc.schemas import Diff, Job, JobStatus, ReportSide
 from ahcc.storage.repository import (
@@ -209,6 +210,12 @@ def download_excel(job_id: str):
 def download_pdf(job_id: str):
     path = _regenerate_report(job_id, "report.pdf", export_pdf)
     return _no_cache_report_response(path, filename=f"AHCC-{job_id}.pdf")
+
+
+@router.get("/{job_id}/report.html")
+def download_html(job_id: str):
+    path = _regenerate_report(job_id, "report.html", export_html)
+    return _no_cache_report_response(path, filename=f"AHCC-{job_id}.html")
 
 
 def _load_job_for_report(job_id: str) -> Job:

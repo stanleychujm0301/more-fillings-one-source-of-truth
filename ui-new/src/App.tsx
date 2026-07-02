@@ -256,7 +256,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-function reportUrl(jobId: string, extension: 'pdf' | 'xlsx'): string {
+function reportUrl(jobId: string, extension: 'pdf' | 'html'): string {
   return apiUrl(`/api/jobs/${encodeURIComponent(jobId)}/report.${extension}?template=latest`)
 }
 
@@ -634,6 +634,13 @@ function stageLabel(stage?: string | null): string {
   return '排队等待'
 }
 
+const RUNNING_STAGES = ['parsing', 'profiling', 'checking', 'reporting'] as const
+
+function runningStageIndex(stage?: string | null): number {
+  if (!stage) return -1
+  return RUNNING_STAGES.indexOf(stage as (typeof RUNNING_STAGES)[number])
+}
+
 function runningProgressLabel(job: JobDetail): string {
   const progress = latestProgress(job)
   if (!progress) return statusLabel(job.status)
@@ -790,6 +797,17 @@ function App() {
       loadHistory(historyScope).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
     }
   }, [historyScope, loadHistory, route.page])
+
+  const historyHasRunning = history.some((item) => JOB_REFRESH_STATUSES.has(item.status))
+
+  useEffect(() => {
+    if (route.page !== 'history' && route.page !== 'cockpit') return
+    if (!historyHasRunning) return
+    const intervalId = window.setInterval(() => {
+      loadHistory(historyScope).catch(() => {})
+    }, 2500)
+    return () => window.clearInterval(intervalId)
+  }, [historyHasRunning, historyScope, loadHistory, route.page])
 
   useEffect(() => {
     if (route.page === 'job' && route.jobId) {
@@ -1040,7 +1058,7 @@ function App() {
         )}
       </main>
 
-      {activeDiff && <EvidenceDialog diff={activeDiff} onClose={() => setActiveDiff(null)} />}
+      {activeDiff && <EvidenceDialog diff={activeDiff} job={job} onClose={() => setActiveDiff(null)} />}
     </div>
   )
 }
@@ -1055,7 +1073,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   if (!job) {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">下载 Excel</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML 报告</span>
         <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
@@ -1064,7 +1082,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   if (job.status !== 'done') {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">等待 Excel</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">等待 HTML 报告</span>
         <span className="job-report-action-link disabled" aria-disabled="true">等待 PDF</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
@@ -1072,7 +1090,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   }
   return (
     <div className="job-report-actions" aria-label="报告操作">
-      <a className="job-report-action-link" href={reportUrl(job.job_id, 'xlsx')}>下载 Excel</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}>下载 HTML 报告</a>
       <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}>下载 PDF</a>
       <a className="job-report-action-link" href="#/history">返回项目历史</a>
     </div>
@@ -1423,6 +1441,35 @@ function MissingJobFallback({
   )
 }
 
+function JobRunningProgress({ job }: { job: JobDetail }) {
+  const progress = latestProgress(job)
+  const rawPercent = progress?.percent
+  const percent = Math.max(0, Math.min(100, rawPercent ?? 0))
+  const stageIdx = runningStageIndex(progress?.stage || job.status)
+  return (
+    <div className="running-progress">
+      <div className="running-progress-head">
+        <span>{progress?.message || stageLabel(progress?.stage || job.status)}</span>
+        <strong>{percent}%</strong>
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <ol className="stage-stepper">
+        {RUNNING_STAGES.map((stage, index) => {
+          const state = index < stageIdx ? 'done' : index === stageIdx ? 'active' : 'todo'
+          return (
+            <li key={stage} className={`stage-step ${state}`}>
+              <span className="stage-dot" />
+              <span>{stageLabel(stage)}</span>
+            </li>
+          )
+        })}
+      </ol>
+    </div>
+  )
+}
+
 function JobDetailPage({
   job,
   setActiveDiff,
@@ -1456,6 +1503,7 @@ function JobDetailPage({
           </div>
           <h3 className="audit-result-title">{conclusion.title}</h3>
           <p>{conclusion.copy}</p>
+          {shouldRefreshJob(job) ? <JobRunningProgress job={job} /> : null}
           <div className="audit-conclusion-chips">
             <span>{labels.a}事实 <strong>{metric(summary, 'a_fact_count')}</strong></span>
             <span>{labels.h}事实 <strong>{metric(summary, 'h_fact_count')}</strong></span>
@@ -1503,6 +1551,12 @@ function JobDetailPage({
           label="耗时"
           value={formatDuration(job.duration_seconds)}
           note={`证据定位 ${conclusion.evidenceItems} · 总差异 ${metric(summary, 'total_diff_count')}`}
+        />
+        <DashboardMetric
+          tone={(summaryNumber(summary, 'text_overlay_tamper_count') || summaryNumber(summary, 'visual_text_layer_mismatch_count')) ? 'critical' : undefined}
+          label="疑似篡改识别"
+          value={`${metric(summary, 'text_overlay_tamper_count')} / ${metric(summary, 'visual_text_layer_mismatch_count')}`}
+          note={`叠加检测 / 视觉复核 · 关键指标精确差异 ${metric(summary, 'key_metric_exact_diff_count')}`}
         />
       </div>
 
@@ -1857,13 +1911,29 @@ function EmptyState({ label }: { label: string }) {
   return <div className="empty">{label}</div>
 }
 
-function EvidenceDialog({ diff, onClose }: { diff: DiffItem; onClose: () => void }) {
+function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail | null; onClose: () => void }) {
   const evidences = diff.evidence || []
   const explanation = diff.diff_explanation
   const items = explanation?.items || []
   const values = reviewValues(diff)
   const citations = diff.standard_reasoning?.citations || []
   const chart = diff.chart_cross
+  const labels = job ? sideLabelsForJob(job) : { a: 'A 股', h: 'H 股', factLabel: '画像事实' }
+  const scope = normalizedDiffScope(diff)
+  // internal 差异（a_internal/h_internal）比较的是同一份报告内部的"可见值"与"底层原值"
+  // （见 text_overlay_tamper.py / key_metric_tamper.py 对 a_value/h_value 的复用），
+  // 不是两份不同报告的对比，表头文案与配色都要按此区分，避免误导为跨报告差异。
+  const compareLeft = scope === 'h_internal'
+    ? { label: `${labels.h} · 可见值`, side: 'h-side' as const }
+    : scope === 'a_internal'
+      ? { label: `${labels.a} · 可见值`, side: 'a-side' as const }
+      : { label: labels.a, side: 'a-side' as const }
+  const compareRight = scope === 'h_internal'
+    ? { label: `${labels.h} · 底层原值`, side: 'h-side' as const }
+    : scope === 'a_internal'
+      ? { label: `${labels.a} · 底层原值`, side: 'a-side' as const }
+      : { label: labels.h, side: 'h-side' as const }
+  const valueChipLabel = scope === 'a_internal' || scope === 'h_internal' ? '可见值/底层原值' : `${labels.a}/${labels.h} 取值`
   return (
     <div className="review-overlay" role="presentation" onClick={onClose}>
       <section className="review-shell" role="dialog" aria-modal="true" aria-label="证据复核" onClick={(event) => event.stopPropagation()}>
@@ -1883,7 +1953,7 @@ function EvidenceDialog({ diff, onClose }: { diff: DiffItem; onClose: () => void
           <span className={`triage ${triageClass(diff.triage)}`}>{triageLabel(diff.triage)}</span>
           <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
           <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
-          <span className="mode-chip">A/H 取值 {valueText(values.aValue)} / {valueText(values.hValue)}</span>
+          <span className="mode-chip">{valueChipLabel} {valueText(values.aValue)} / {valueText(values.hValue)}</span>
           <span className="mode-chip">差异率 {diffRatio(values.aValue, values.hValue)}</span>
         </div>
 
@@ -1915,13 +1985,13 @@ function EvidenceDialog({ diff, onClose }: { diff: DiffItem; onClose: () => void
             </div>
 
             <div className="review-compare">
-              <div className="review-value-card a-side">
-                <span>A 股</span>
+              <div className={`review-value-card ${compareLeft.side}`}>
+                <span>{compareLeft.label}</span>
                 <strong>{valueText(values.aValue)}</strong>
                 <small>{values.aPage ? `第 ${values.aPage} 页` : '页码待确认'}</small>
               </div>
-              <div className="review-value-card h-side">
-                <span>H 股</span>
+              <div className={`review-value-card ${compareRight.side}`}>
+                <span>{compareRight.label}</span>
                 <strong>{valueText(values.hValue)}</strong>
                 <small>{values.hPage ? `第 ${values.hPage} 页` : `差额 ${valueText(values.delta)}`}</small>
               </div>
@@ -1933,7 +2003,12 @@ function EvidenceDialog({ diff, onClose }: { diff: DiffItem; onClose: () => void
                   <article className="review-explanation-card" key={`${diff.diff_id}-item-${index}`}>
                     <span>{item.label || item.role || `差异项 ${index + 1}`}</span>
                     <strong>{valueText(item.a_value)} / {valueText(item.h_value)}</strong>
-                    <small>差额 {valueText(item.delta)} · A p{item.a_page || '—'} / H p{item.h_page || '—'}</small>
+                    <small>
+                      差额 {valueText(item.delta)} ·{' '}
+                      {scope === 'a_internal' || scope === 'h_internal'
+                        ? `p${item.a_page || item.h_page || '—'}`
+                        : `A p${item.a_page || '—'} / H p${item.h_page || '—'}`}
+                    </small>
                     {(item.a_snippet || item.h_snippet) && (
                       <p>{item.a_snippet || '—'}<br />{item.h_snippet || '—'}</p>
                     )}

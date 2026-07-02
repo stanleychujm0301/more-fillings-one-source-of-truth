@@ -615,7 +615,8 @@ def test_ui_new_evidence_review_uses_full_screen_review_layout_and_rich_diff_fie
         "元数据",
         "规则 ID",
         "审阅提示",
-        "A/H 取值",
+        "valueChipLabel",
+        "可见值/底层原值",
         "差异率",
         "准则推理",
         "引用条款",
@@ -623,6 +624,15 @@ def test_ui_new_evidence_review_uses_full_screen_review_layout_and_rich_diff_fie
         "定位列表",
     ):
         assert label in source
+
+    # a_internal/h_internal 差异（同一份报告内部对照）表头必须按侧标注"可见值/底层原值"，
+    # 不能沿用跨报告的 A 股/H 股 措辞——回归锁定 EvidenceDialog 的 scope 判断逻辑。
+    for token in (
+        "normalizedDiffScope(diff)",
+        "· 可见值",
+        "· 底层原值",
+    ):
+        assert token in source
 
     for field in (
         "bbox",
@@ -791,7 +801,7 @@ def test_ui_new_job_detail_topbar_uses_report_actions_instead_of_page_title():
     for token in (
         "job-report-actions",
         "job-report-action-link",
-        "下载 Excel",
+        "下载 HTML 报告",
         "下载 PDF",
         "返回项目历史",
     ):
@@ -813,9 +823,9 @@ def test_ui_new_job_detail_topbar_uses_report_actions_instead_of_page_title():
 def test_ui_new_download_links_bust_browser_cache_for_latest_reports():
     source = APP_TSX.read_text(encoding="utf-8")
 
-    assert "function reportUrl(jobId: string, extension: 'pdf' | 'xlsx')" in source
+    assert "function reportUrl(jobId: string, extension: 'pdf' | 'html')" in source
     assert "report.${extension}?template=latest" in source
-    assert "reportUrl(job.job_id, 'xlsx')" in source
+    assert "reportUrl(job.job_id, 'html')" in source
     assert "reportUrl(job.job_id, 'pdf')" in source
 
 

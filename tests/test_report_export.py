@@ -9,12 +9,14 @@ import pytest
 from openpyxl import load_workbook
 
 from ahcc.report.excel import export_excel
+from ahcc.report.html import export_html
 from ahcc.report.pdf import export_pdf
 from ahcc.report import _style as S
 from ahcc.schemas import (
     Diff,
     DiffExplanation,
     DiffExplanationItem,
+    DiffScope,
     DiffSeverity,
     DiffType,
     DisclosureCoverageItem,
@@ -659,3 +661,126 @@ def test_excel_tables_use_polished_table_contract() -> None:
                 out_path.unlink()
             except PermissionError:
                 pass
+
+
+def _a_internal_overlay_diff() -> Diff:
+    """构造一条 a_internal 差异，模拟 text_overlay_tamper：a_value=可见值，h_value=底层原值。"""
+    return Diff(
+        diff_id="OVERLAY_A_17_1",
+        diff_type=DiffType.INTERNAL,
+        diff_scope=DiffScope.A_INTERNAL,
+        severity=DiffSeverity.HIGH,
+        triage="real",
+        topic=LocalizedString(zh="A股文本层叠加篡改"),
+        summary=LocalizedString(zh="A股第17页文本层叠加异常：可见值 126,411 覆盖原值 126,311，疑似篡改"),
+        a_value=126411.0,
+        h_value=126311.0,
+        evidence=[
+            Evidence(side=ReportSide.A_SHARE, page=17, snippet="营业收入 可见:126,411 底层:126,311"),
+            Evidence(side=ReportSide.A_SHARE, page=17, snippet="底层原值 126,311（被 126,411 覆盖）"),
+        ],
+        rule_id="text_overlay_tamper",
+    )
+
+
+def test_html_export_generates_nonempty_self_contained_file() -> None:
+    job = _report_job()
+    out_dir = Path("storage") / "test-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"report-{uuid4().hex}.html"
+
+    try:
+        export_html(job, out_path)
+        assert out_path.is_file()
+        content = out_path.read_text(encoding="utf-8")
+        assert content.startswith("<!DOCTYPE html>")
+        assert "示例金融项目" in content
+        for diff in job.diffs:
+            assert diff.diff_id in content
+    finally:
+        if out_path.exists():
+            out_path.unlink()
+
+
+def test_html_export_does_not_mislabel_internal_diff_as_cross_report() -> None:
+    """a_internal 差异（同一份 A 股报告内部对照）不应在对照卡片里出现「H 股」表头。"""
+    job = _report_job()
+    job.diffs = [_a_internal_overlay_diff()]
+    out_dir = Path("storage") / "test-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"report-{uuid4().hex}.html"
+
+    try:
+        export_html(job, out_path)
+        content = out_path.read_text(encoding="utf-8")
+        assert "OVERLAY_A_17_1" in content
+        # 对照卡片表头必须标"可见值/底层原值"，且都是同一侧（A 股），不能出现「H 股」
+        assert "<span>A 股 · 可见值</span>" in content
+        assert "<span>A 股 · 底层原值</span>" in content
+        assert "<span>H 股</span>" not in content
+        assert "<span>A 股</span>" not in content
+    finally:
+        if out_path.exists():
+            out_path.unlink()
+
+
+def test_html_export_uses_cross_report_labels_for_normal_diff() -> None:
+    job = _report_job()
+    job.diffs = [
+        Diff(
+            diff_id="d-cross",
+            diff_type=DiffType.NUMERIC,
+            diff_scope=DiffScope.CROSS_REPORT,
+            severity=DiffSeverity.CRITICAL,
+            triage="real",
+            topic=LocalizedString(zh="营业收入"),
+            summary=LocalizedString(zh="A/H 营业收入不一致"),
+            a_value=100.0,
+            h_value=98.0,
+            evidence=[
+                Evidence(side=ReportSide.A_SHARE, page=1, snippet="a"),
+                Evidence(side=ReportSide.H_SHARE, page=1, snippet="h"),
+            ],
+        )
+    ]
+    out_dir = Path("storage") / "test-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"report-{uuid4().hex}.html"
+
+    try:
+        export_html(job, out_path)
+        content = out_path.read_text(encoding="utf-8")
+        assert "<span>A 股</span>" in content
+        assert "<span>H 股</span>" in content
+    finally:
+        if out_path.exists():
+            out_path.unlink()
+
+
+def test_html_export_includes_full_diff_list_without_row_cap() -> None:
+    """HTML 报告内容对齐 Excel（不设行数上限），而不是 PDF 的 60 行截断。"""
+    job = _report_job()
+    job.diffs = [
+        Diff(
+            diff_id=f"d-bulk-{i}",
+            diff_type=DiffType.NUMERIC,
+            severity=DiffSeverity.LOW,
+            triage="unresolved",
+            topic=LocalizedString(zh=f"指标{i}"),
+            summary=LocalizedString(zh=f"差异{i}"),
+            evidence=[Evidence(side=ReportSide.A_SHARE, page=1, snippet="x")],
+        )
+        for i in range(75)
+    ]
+    out_dir = Path("storage") / "test-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"report-{uuid4().hex}.html"
+
+    try:
+        export_html(job, out_path)
+        content = out_path.read_text(encoding="utf-8")
+        for i in range(75):
+            assert f"d-bulk-{i}" in content
+    finally:
+        if out_path.exists():
+            out_path.unlink()

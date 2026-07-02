@@ -94,6 +94,29 @@ def test_excel_download_regenerates_with_current_exporter_and_disables_cache(mon
     assert "no-store" in response.headers["cache-control"]
 
 
+def test_html_download_regenerates_with_current_exporter_and_disables_cache(monkeypatch, workspace_tmp):
+    job_id = "j-download"
+    report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
+    old_path = report_dir / "report.html"
+    old_path.write_bytes(b"old-html")
+
+    def fake_export_html(job, out_path):
+        assert job.job_id == job_id
+        assert job.company_name == "Downloaded Project"
+        Path(out_path).write_bytes(b"latest-html")
+
+    monkeypatch.setattr(routes_job, "export_html", fake_export_html, raising=False)
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/{job_id}/report.html?template=latest")
+
+    assert response.status_code == 200
+    assert response.content == b"latest-html"
+    assert old_path.read_bytes() == b"latest-html"
+    assert "no-store" in response.headers["cache-control"]
+    assert "attachment" in response.headers.get("content-disposition", "")
+
+
 def test_report_download_generation_failure_does_not_serve_stale_file(monkeypatch, workspace_tmp):
     job_id = "j-download"
     report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
