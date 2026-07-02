@@ -189,14 +189,6 @@ def _path_is_under(path: Path, parent: Path) -> bool:
     return True
 
 
-def _no_cache_index() -> FileResponse:
-    response = FileResponse(INDEX_HTML)
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return _no_cache_ui_new_index()
