@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -50,6 +51,53 @@ def test_init_db_seeds_demo_user_and_job_ownership_columns(monkeypatch, workspac
     assert user["display_name"] == "Chu, Stanley"
     assert user["office_line"] == "SH/FS3"
     assert user["project_group_id"] == "sh-fs3"
+
+
+def test_sqlite_connection_tolerates_locked_journal_pragma(monkeypatch, workspace_tmp):
+    class FakeConnection:
+        row_factory = None
+
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, statement: str):
+            self.statements.append(statement)
+            if "journal_mode" in statement or "synchronous" in statement:
+                raise sqlite3.OperationalError("database is locked")
+            return None
+
+    fake = FakeConnection()
+    monkeypatch.setattr(models.sqlite3, "connect", lambda *args, **kwargs: fake)
+
+    conn = models._connect_sqlite(workspace_tmp / "locked.db")
+
+    assert conn is fake
+    assert fake.statements[0] == "PRAGMA busy_timeout=30000"
+    assert "PRAGMA synchronous=NORMAL" in fake.statements
+
+
+def test_get_conn_tolerates_locked_schema_check(monkeypatch, workspace_tmp):
+    class FakeConnection:
+        row_factory = None
+        closed = False
+
+        def execute(self, statement: str):
+            return None
+
+        def executescript(self, script: str):
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake = FakeConnection()
+    monkeypatch.setattr(models, "_active_sqlite_path", lambda: workspace_tmp / "locked.db")
+    monkeypatch.setattr(models, "_connect_sqlite", lambda path: fake)
+
+    with models.get_conn() as conn:
+        assert conn is fake
+
+    assert fake.closed is True
 
 
 def test_session_current_and_profile_update(monkeypatch, workspace_tmp):
@@ -142,7 +190,7 @@ def test_history_scope_filters_project_and_current_user(monkeypatch, workspace_t
                 "Team Mate",
                 "sh-fs3",
                 "SH/FS3",
-                json.dumps({"result_version": 11}),
+                json.dumps({"result_version": 12}),
             ),
         )
         conn.execute(
@@ -162,7 +210,7 @@ def test_history_scope_filters_project_and_current_user(monkeypatch, workspace_t
                 "Other User",
                 "bj-fs1",
                 "BJ/FS1",
-                json.dumps({"result_version": 11}),
+                json.dumps({"result_version": 12}),
             ),
         )
         conn.commit()
@@ -198,6 +246,7 @@ class _FakeOrchestrator:
         company_name: str | None = None,
         check_mode: str = "ah",
         bilingual_level: str = "fast",
+        visual_review_mode: str = "smart",
     ) -> Job:
         return Job(
             job_id="j-user",

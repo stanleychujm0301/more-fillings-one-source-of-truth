@@ -5,6 +5,7 @@ from __future__ import annotations
 from ahcc.schemas import (
     DataPoint,
     Diff,
+    DiffScope,
     DiffExplanation,
     DiffExplanationItem,
     DiffSeverity,
@@ -45,6 +46,28 @@ def test_diff_serialization():
     assert restored.diff_id == "d-001"
     assert len(restored.evidence) == 2
     assert restored.evidence[0].page == 45
+
+
+def test_diff_scope_serialization_defaults_to_cross_report():
+    diff = Diff(
+        diff_id="d-scope",
+        diff_type=DiffType.NUMERIC,
+        severity=DiffSeverity.HIGH,
+        topic=LocalizedString(zh="Revenue", en="Revenue"),
+        summary=LocalizedString(zh="A/H mismatch", en="A/H mismatch"),
+    )
+
+    assert diff.diff_scope == DiffScope.CROSS_REPORT
+    payload = diff.model_dump(mode="json")
+    assert payload["diff_scope"] == "cross_report"
+
+    restored = Diff.model_validate(
+        {
+            **payload,
+            "diff_scope": "a_internal",
+        }
+    )
+    assert restored.diff_scope == DiffScope.A_INTERNAL
 
 
 def test_diff_explanation_is_optional_and_serialized():

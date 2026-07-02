@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from datetime import datetime
 from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Optional
 
 from ahcc.profile.models import MetricItem, MetricOccurrences, ReportProfile
-from ahcc.schemas import Currency, Diff, DiffType, Evidence, Job, JobStatus, LocalizedString, ReportSide, ReviewStatus
+from ahcc.schemas import Currency, Diff, DiffSeverity, DiffType, Evidence, Job, JobStatus, LocalizedString, ReportSide, ReviewStatus
 from ahcc.storage.models import get_conn
-from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, classify_warning
+from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION, classify_warning
 from ahcc.user_context import (
     CURRENT_PROJECT_GROUP_ID,
     CURRENT_USER_ID,
@@ -20,7 +21,14 @@ from ahcc.user_context import (
     public_user_payload,
 )
 
-_CURRENT_RESULT_VERSION = 11
+_CURRENT_RESULT_VERSION = 16
+_RUNNING_JOB_STATUSES = {
+    JobStatus.PENDING.value,
+    JobStatus.PARSING.value,
+    JobStatus.PROFILING.value,
+    JobStatus.CHECKING.value,
+    JobStatus.REPORTING.value,
+}
 _LEGACY_TEMPLATE_MARKERS = ("□适用", "√不适用")
 _LEGACY_GOVERNANCE_SECTIONS = {"corporate_governance", "governance"}
 _LEGACY_GOVERNANCE_SOFT_TERMS = (
@@ -328,6 +336,7 @@ def _summary_from_diffs(base_summary: dict, diffs: list[Diff], legacy: bool = Fa
     sanitized["expected_diff_count"] = sum(1 for diff in diffs if diff.triage == "expected")
     sanitized["unresolved_diff_count"] = sum(1 for diff in diffs if diff.triage == "unresolved")
     sanitized["event_fact_diff_count"] = sum(1 for diff in diffs if diff.rule_id == "event_fact_match")
+    sanitized["llm_semantic_review_count"] = sum(1 for diff in diffs if diff.rule_id == "llm_semantic_review")
     sanitized["total_diff_count"] = len(diffs)
     if legacy:
         sanitized["legacy_result_sanitized"] = True
@@ -391,6 +400,156 @@ def save_job(job: Job) -> None:
                 ),
             )
         conn.commit()
+
+
+def running_progress_summary(
+    summary: dict | None,
+    stage: JobStatus | str,
+    percent: int,
+    message: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Attach lightweight persisted progress without adding a DB table."""
+    current = now or datetime.utcnow()
+    stage_value = stage.value if isinstance(stage, JobStatus) else str(stage)
+    sanitized = dict(summary or {})
+    sanitized.update(
+        {
+            "result_version": _CURRENT_RESULT_VERSION,
+            "parser_version": PARSER_VERSION,
+            "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
+            "current_extraction_engine_version": EXTRACTION_ENGINE_VERSION,
+            "stale_result": False,
+            "current_stage": stage_value,
+            "current_percent": max(0, min(100, int(percent))),
+            "current_message": message,
+            "last_progress_at": current.isoformat(),
+        }
+    )
+    return sanitized
+
+
+def save_job_progress(job: Job) -> None:
+    """Persist only the lightweight runtime status fields for polling UIs."""
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE jobs
+            SET status = ?, finished_at = ?, duration_seconds = ?, error = ?,
+                comparison_summary_json = ?
+            WHERE job_id = ?""",
+            (
+                job.status.value,
+                job.finished_at.isoformat() if job.finished_at else None,
+                job.duration_seconds,
+                job.error,
+                json.dumps(job.comparison_summary, ensure_ascii=False),
+                job.job_id,
+            ),
+        )
+        conn.commit()
+
+
+def mark_interrupted_running_jobs_failed(now: datetime | None = None) -> int:
+    """Fail in-memory background jobs left behind by a service restart."""
+    current = now or datetime.utcnow()
+    return _mark_running_jobs_failed(
+        current=current,
+        should_fail=lambda row, summary: True,
+        message_factory=lambda row, summary: "background job interrupted: service restarted before the task completed; please rerun the task.",
+        extra_summary={"job_interrupted": True},
+    )
+
+
+def mark_stale_running_jobs_failed(
+    *,
+    stale_after_seconds: float,
+    now: datetime | None = None,
+) -> int:
+    """Fail running jobs whose in-memory background task cannot still exist."""
+    current = now or datetime.utcnow()
+    return _mark_running_jobs_failed(
+        current=current,
+        should_fail=lambda row, summary: _running_job_age_seconds(row, summary, current) > stale_after_seconds,
+        message_factory=lambda row, summary: (
+            "background job interrupted: service restarted or no progress "
+            f"for more than {int(stale_after_seconds)} seconds; please rerun the task."
+        ),
+        extra_summary={"job_interrupted": True, "job_stale_after_seconds": stale_after_seconds},
+    )
+
+
+def _mark_running_jobs_failed(
+    *,
+    current: datetime,
+    should_fail,
+    message_factory,
+    extra_summary: dict,
+) -> int:
+    changed = 0
+    placeholders = ",".join("?" for _ in _RUNNING_JOB_STATUSES)
+    with get_conn() as conn:
+        try:
+            rows = conn.execute(
+                f"""SELECT job_id, status, started_at, comparison_summary_json
+                FROM jobs WHERE status IN ({placeholders})""",
+                tuple(_RUNNING_JOB_STATUSES),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
+            return 0
+        for row in rows:
+            summary = _load_json_field(row["comparison_summary_json"], {})
+            if not should_fail(row, summary):
+                continue
+
+            started_at = _parse_datetime(str(row["started_at"] or "")) or current
+            duration_seconds = max(0.0, (current - started_at).total_seconds())
+            error = message_factory(row, summary)
+            failed_summary = running_progress_summary(
+                summary,
+                JobStatus.FAILED,
+                0,
+                error,
+                now=current,
+            )
+            failed_summary.update(extra_summary)
+            conn.execute(
+                """UPDATE jobs
+                SET status = ?, finished_at = ?, duration_seconds = ?, error = ?,
+                    comparison_summary_json = ?
+                WHERE job_id = ?""",
+                (
+                    JobStatus.FAILED.value,
+                    current.isoformat(),
+                    duration_seconds,
+                    error,
+                    json.dumps(failed_summary, ensure_ascii=False),
+                    row["job_id"],
+                ),
+            )
+            changed += 1
+        conn.commit()
+    return changed
+
+
+def _running_job_age_seconds(row, summary: dict, current: datetime) -> float:
+    last_progress = _parse_datetime(
+        str(summary.get("last_progress_at") or row["started_at"] or "")
+    )
+    if last_progress is None:
+        last_progress = current
+    return (current - last_progress).total_seconds()
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _load_json_field(value: str | None, default):
@@ -853,7 +1012,7 @@ def _legacy_has_matching_amount(value: float, candidates: set[float]) -> bool:
 
 
 def _is_legacy_branch_diff(diff: Diff) -> bool:
-    if diff.triage != "real" or diff.diff_type != DiffType.DISCLOSURE:
+    if diff.triage not in {"real", "unresolved"} or diff.diff_type != DiffType.DISCLOSURE:
         return False
     if diff.rule_id and diff.rule_id != "branch_asset_scale_match":
         return False
@@ -864,9 +1023,10 @@ def _is_legacy_branch_diff(diff: Diff) -> bool:
 
 
 def _normalize_legacy_branch_diff(diff: Diff) -> Diff:
-    if diff.rule_id == "branch_asset_scale_match":
-        return diff
-    return diff.model_copy(update={"rule_id": "branch_asset_scale_match"})
+    updates = {"rule_id": "branch_asset_scale_match", "triage": "real"}
+    if diff.severity in {DiffSeverity.HIGH, DiffSeverity.CRITICAL}:
+        updates["severity"] = DiffSeverity.MEDIUM
+    return diff.model_copy(update=updates)
 
 
 def _is_legacy_low_confidence_branch_diff(diff: Diff) -> bool:

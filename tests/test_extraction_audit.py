@@ -7,14 +7,14 @@ from uuid import uuid4
 import pytest
 from ahcc.config import settings
 from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, build_extraction_audit, classify_warning
-from ahcc.parser import pdf_h_html
+from ahcc.parser import pdf_a, pdf_h_html
 from ahcc.parser.pdf_h_html import _build_h_table_coverage
 from ahcc.schemas import Language, ReportDocument, ReportSide
 from ahcc.storage.repository import _attach_current_extraction_metadata, _sanitize_summary_for_loaded_job
 
 
 def test_extraction_engine_version_marks_branch_repair_release():
-    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.7"
+    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.13"
 
 
 def _cached_doc(file_path: Path, marker: str = "v1") -> ReportDocument:
@@ -122,6 +122,68 @@ def test_engine_diagnostics_are_not_promoted_to_user_warnings() -> None:
     assert "camelot_no_tables" not in audit.warning_flags
     assert audit.engines["camelot"]["added_tables"] == 0
     assert "table_coverage" in audit.engines
+
+
+def test_a_share_parser_keeps_pymupdf_text_when_pdfplumber_misses_visible_numbers(monkeypatch) -> None:
+    class FakePage:
+        def extract_text(self):
+            return ""
+
+        def extract_tables(self, *args, **kwargs):
+            return []
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("pdfplumber.open", lambda _path: FakePdf())
+    monkeypatch.setattr(pdf_a, "extract_tables_camelot", lambda *args, **kwargs: [])
+    monkeypatch.setattr(pdf_a, "extract_tables_ppstructure", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        pdf_a,
+        "_extract_pymupdf_page_texts",
+        lambda _path: {1: "主要会计数据\n营业收入 126,411\n利润总额 49,697"},
+        raising=False,
+    )
+
+    doc = pdf_a.parse_a_pdf("a-share-visible-layer.pdf")
+
+    joined = "\n".join((segment.raw_text or segment.text) for segment in doc.texts)
+    assert "营业收入 126,411" in joined
+    assert "利润总额 49,697" in joined
+    assert doc.metadata["extraction_engines"]["pymupdf_text_pages"] == [1]
+
+
+def test_a_share_parser_uses_fast_pymupdf_text_path_by_default(monkeypatch) -> None:
+    from ahcc.config import settings
+
+    monkeypatch.setattr(settings, "enable_a_share_table_extraction", False)
+    monkeypatch.setattr(
+        pdf_a,
+        "_extract_pymupdf_page_texts",
+        lambda _path: {
+            1: "主要会计数据\n营业收入 126,411",
+            2: "合并利润表\n净利润 12,300",
+        },
+    )
+
+    def fail_pdfplumber_open(_path):
+        raise AssertionError("pdfplumber should be skipped on the default fast A-share parse path")
+
+    monkeypatch.setattr("pdfplumber.open", fail_pdfplumber_open)
+
+    doc = pdf_a.parse_a_pdf("a-share-fast.pdf")
+
+    assert doc.total_pages == 2
+    assert doc.tables == []
+    assert "营业收入 126,411" in "\n".join(segment.text for segment in doc.texts)
+    assert doc.metadata["extraction_engines"]["text"] == "pymupdf"
+    assert doc.metadata["extraction_engines"]["tables"] == []
 
 
 def test_audit_records_engine_version_and_warning_classification() -> None:
@@ -247,7 +309,7 @@ def test_loaded_legacy_h_bilingual_summary_requires_rerun_not_5000_real_diffs() 
         },
     )
 
-    assert summary["result_version"] == 11
+    assert summary["result_version"] == 16
     assert summary["stale_result"] is True
     assert summary["legacy_result_sanitized"] is True
     assert summary["legacy_result_requires_rerun"] is True

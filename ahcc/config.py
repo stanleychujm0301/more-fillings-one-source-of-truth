@@ -62,6 +62,36 @@ class Settings(BaseSettings):
     demo_cache_path: Path = Path("./storage/demo_cache.json")
     demo_mode: bool = False
 
+    # A/H numeric semantic review: LLM may downgrade non-comparable high-confidence candidates.
+    numeric_use_llm_semantic_review: bool = True
+    numeric_llm_review_min_confidence: float = 0.80
+    event_use_llm_semantic_review: bool = True
+    event_llm_review_min_confidence: float = 0.80
+    enable_standard_check: bool = False
+    enable_disclosure_coverage_check: bool = False
+    enable_a_share_table_extraction: bool = False
+    enable_profile_ocr_fallback: bool = False
+    profile_ocr_fallback_max_pages: int = 40
+    visual_ocr_smart_max_pages: int = 8
+    visual_ocr_strict_max_pages: int = 24
+    visual_ocr_max_seconds_per_side: float = 45.0
+    visual_ocr_easyocr_skip_pages: int = 180
+    visual_ocr_easyocr_skip_mb: float = 20.0
+    chart_detection_max_pages: int = 60
+    enable_chart_vlm_check: bool = False
+    # 文本层叠加篡改检测（纯 fitz，无 OCR）：检出"错误值覆盖在原值上方"的植入式篡改
+    enable_text_overlay_check: bool = True
+    # 任务执行：subprocess=每个任务独立 worker 子进程（可强杀，崩溃不连累服务）；inline=事件循环内执行（测试/评估用）
+    job_runner: str = "subprocess"
+    job_max_concurrency: int = 1
+    job_timeout_seconds: float = 1800
+    job_stale_after_seconds: float = 900
+    # worker 心跳文件超过该秒数未更新即判定卡死并强杀
+    job_heartbeat_stale_seconds: float = 300
+    # H 股解析乱码页 OCR 兜底预算（超出预算的乱码页跳过 OCR，仅记 audit warning）
+    parse_garbled_ocr_max_pages: int = 10
+    parse_garbled_ocr_max_seconds: float = 120.0
+
     def ensure_dirs(self) -> None:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.chroma_persist_dir.mkdir(parents=True, exist_ok=True)

@@ -184,6 +184,12 @@ class DiffType(str, Enum):
     INTERNAL = "internal"            # 单报告内部一致性：同一指标多次出现值不一致
 
 
+class DiffScope(str, Enum):
+    CROSS_REPORT = "cross_report"
+    A_INTERNAL = "a_internal"
+    H_INTERNAL = "h_internal"
+
+
 class StandardCitation(BaseModel):
     """RAG 引用的准则条款。"""
     standard_code: str  # 例 "CAS 6" 或 "IAS 38"
@@ -244,6 +250,7 @@ class Diff(BaseModel):
     """差异记录 — 报告的最小单位。"""
     diff_id: str
     diff_type: DiffType
+    diff_scope: DiffScope = DiffScope.CROSS_REPORT
     severity: DiffSeverity
     triage: Literal["real", "expected", "unresolved"] = "real"
     canonical_key: Optional[str] = None

@@ -16,6 +16,9 @@ from loguru import logger
 
 from ahcc.schemas import (
     Diff,
+    DiffExplanation,
+    DiffExplanationItem,
+    DiffScope,
     DiffSeverity,
     DiffType,
     Evidence,
@@ -354,16 +357,9 @@ async def run_disclosure_checks_on_profiles(profile_a, profile_h) -> list[Diff]:
             continue
         diffs.append(_profile_diff_to_diff(pd))
 
-    # ---- B: 需要原始 ReportDocument 的检查 ----
-    doc_a = getattr(profile_a, 'source_doc', None)
-    doc_h = getattr(profile_h, 'source_doc', None)
-
-    if doc_a and doc_h:
-        # 单边位置/详略覆盖由 coverage_items 处理；这里仅保留双边事实核查。
-        from ahcc.check.branch_disclosure import compare_branch_tables
-        diffs.extend(compare_branch_tables(doc_a, doc_h))
-    else:
-        logger.warning("source_doc 不可用，跳过位置/详略/分支机构检查")
+    # 分支机构资产规模核查已迁移至 orchestrator._check_branch（走轻量 fitz 文本抽取，
+    # 不依赖 profile.source_doc 是否解析成功），此处不再重复产出，避免同一处差异被
+    # 报告两次。
 
     logger.info(f"画像披露差异: {len(diffs)} 条")
     return diffs
@@ -372,9 +368,15 @@ async def run_disclosure_checks_on_profiles(profile_a, profile_h) -> list[Diff]:
 def _profile_diff_to_diff(pd) -> Diff:
     """ProfileDiff → Diff 转换。"""
     diff_id = f"pdl-{uuid.uuid4().hex[:8]}"
+    diff_scope = DiffScope.CROSS_REPORT
+    diff_explanation = None
+    if pd.diff_type == "internal_inconsistency":
+        diff_scope = DiffScope.A_INTERNAL if pd.a_pages else DiffScope.H_INTERNAL
+        diff_explanation = _internal_profile_diff_explanation(pd, diff_scope)
     return Diff(
         diff_id=diff_id,
         diff_type=DiffType.DISCLOSURE,
+        diff_scope=diff_scope,
         severity=pd.severity,
         triage=pd.triage,
         canonical_key=pd.canonical_key,
@@ -383,4 +385,37 @@ def _profile_diff_to_diff(pd) -> Diff:
         a_value=pd.a_value,
         h_value=pd.h_value,
         evidence=pd.evidence,
+        diff_explanation=diff_explanation,
+    )
+
+
+def _internal_profile_diff_explanation(pd, diff_scope: DiffScope) -> DiffExplanation:
+    """Build a first-occurrence/second-occurrence explanation for one-report inconsistencies."""
+    first_ev = pd.evidence[0] if len(pd.evidence) >= 1 else None
+    second_ev = pd.evidence[1] if len(pd.evidence) >= 2 else None
+    side_label = "A股报告" if diff_scope == DiffScope.A_INTERNAL else "H股报告"
+    label = pd.topic.zh or pd.topic.en or pd.canonical_key or "指标"
+    issue = (
+        f"{side_label}自身存在{label}取值不一致："
+        f"第一处为 {pd.a_value if pd.a_value is not None else '未记录'}，"
+        f"第二处为 {pd.h_value if pd.h_value is not None else '未记录'}。"
+    )
+    pages = [str(ev.page) for ev in (first_ev, second_ev) if ev and ev.page]
+    return DiffExplanation(
+        headline=f"{side_label}自身{label}不一致",
+        issue=issue,
+        location=f"{side_label} 第{'/'.join(pages)}页" if pages else "",
+        items=[
+            DiffExplanationItem(
+                label=label,
+                role=pd.canonical_key or "internal_metric",
+                a_value=pd.a_value,
+                h_value=pd.h_value,
+                a_page=first_ev.page if first_ev else None,
+                h_page=second_ev.page if second_ev else None,
+                a_snippet=first_ev.snippet if first_ev else None,
+                h_snippet=second_ev.snippet if second_ev else None,
+            )
+        ],
+        review_hint=f"优先核对{side_label}内两个页码是否为同一期间、同一单位和同一披露口径。",
     )

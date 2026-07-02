@@ -10,13 +10,17 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import re
-import tempfile
+import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
+from ahcc.config import settings
 from ahcc.schemas import Currency, DataPoint, Evidence, ReportSide, LocalizedString
 
 # 可选依赖检测
@@ -31,6 +35,10 @@ try:
     _PADDLEOCR_AVAILABLE = True
 except ImportError:
     _PADDLEOCR_AVAILABLE = False
+
+
+_EASYOCR_READER = None
+_EASYOCR_READER_FACTORY = None
 
 
 # 核心财务指标 → 多语言关键词（含 OCR 常见错字变体）
@@ -70,6 +78,55 @@ _OCR_KEYWORDS: dict[str, list[str]] = {
     "long_term_borrowings": ["長期借款", "长期借款", "長期借貸"],
     "payables": ["應付賬款", "应付账款", "應付款項", "应付款项"],
 }
+
+_OCR_KEYWORDS.update(
+    {
+        "net_asset_per_share": ["Net asset value per share", "Net assets per share"],
+        "weighted_average_roe": [
+            "Weighted average ROE",
+            "Weighted average return on equity",
+            "Weighted average return on net assets",
+        ],
+        "fully_diluted_roe": ["Fully diluted ROE", "Fully diluted return on net assets"],
+        "average_total_asset_return": ["Average return on total assets", "Return on average total assets"],
+        "net_interest_spread": ["Net interest spread"],
+        "net_interest_margin": ["Net interest margin"],
+        "cost_to_income_ratio": ["Cost-to-income ratio", "Cost to income ratio"],
+        "risk_coverage_ratio": ["Risk coverage ratio"],
+        "capital_leverage_ratio": ["Capital leverage ratio"],
+        "liquidity_coverage_ratio": ["Liquidity coverage ratio", "LCR"],
+        "net_stable_funding_ratio": ["Net stable funding ratio", "NSFR"],
+    }
+)
+
+
+@contextmanager
+def _temporary_ocr_dir():
+    """Create OCR temp files under project storage instead of system Temp.
+
+    The Windows demo environment can deny access to AppData temp directories
+    while PyMuPDF/EasyOCR still need a real image path. Keeping these files
+    under storage makes OCR deterministic for local and deployed runs.
+    """
+
+    parent = (settings.storage_dir / "ocr_tmp").resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(10):
+        tmpdir_path = parent / f"ahcc_ocr_{uuid.uuid4().hex[:12]}"
+        try:
+            tmpdir_path.mkdir()
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise RuntimeError(f"Unable to create OCR workspace under {parent}")
+    try:
+        yield str(tmpdir_path)
+    finally:
+        try:
+            shutil.rmtree(tmpdir_path, ignore_errors=True)
+        except Exception:
+            logger.debug("OCR temp cleanup skipped for {}", tmpdir_path)
 
 
 def is_scanned_pdf(pdf_path: str) -> bool:
@@ -126,15 +183,39 @@ def _find_line_value(ocr_lines: list[tuple[str, float]], keyword: str, max_lines
     return None
 
 
-def _run_ocr_easyocr(img_path: str) -> list[tuple[str, float]]:
+def _pixmap_to_easyocr_image(pix):
+    """Convert a PyMuPDF pixmap to an in-memory image for EasyOCR."""
+
+    import numpy as np
+
+    channels = int(getattr(pix, "n", 0) or 0)
+    if channels <= 0:
+        raise ValueError("Invalid OCR pixmap channel count")
+    image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, channels)
+    if channels == 1:
+        return image.copy()
+    return image[:, :, :3][:, :, ::-1].copy()
+
+
+def _run_ocr_easyocr(image) -> list[tuple[str, float]]:
     """使用 EasyOCR 识别图片中的文字。"""
-    reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
-    result = reader.readtext(img_path)
+    reader = _get_easyocr_reader()
+    result = reader.readtext(image)
     outputs: list[tuple[str, float]] = []
     for r in result:
         bbox, text, conf = r
-        outputs.append((text, conf))
+        outputs.append((str(text), float(conf)))
     return outputs
+
+
+def _get_easyocr_reader():
+    global _EASYOCR_READER, _EASYOCR_READER_FACTORY
+
+    factory = easyocr.Reader
+    if _EASYOCR_READER is None or _EASYOCR_READER_FACTORY is not factory:
+        _EASYOCR_READER = factory(["ch_sim", "en"], gpu=False)
+        _EASYOCR_READER_FACTORY = factory
+    return _EASYOCR_READER
 
 
 def _run_ocr_paddleocr(img_path: str) -> list[tuple[str, float]]:
@@ -167,14 +248,13 @@ def ocr_page(pdf_path: str, page_num: int, dpi: int = 200) -> list[dict]:
     page = doc[page_num - 1]
     pix = page.get_pixmap(dpi=dpi)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        img_path = Path(tmpdir) / f"page_{page_num}.png"
-        pix.save(str(img_path))
-
+    with _temporary_ocr_dir() as tmpdir:
         if _PADDLEOCR_AVAILABLE:
+            img_path = Path(tmpdir) / f"page_{page_num}.png"
+            pix.save(str(img_path))
             lines = _run_ocr_paddleocr(str(img_path))
         elif _EASYOCR_AVAILABLE:
-            lines = _run_ocr_easyocr(str(img_path))
+            lines = _run_ocr_easyocr(_pixmap_to_easyocr_image(pix))
         else:
             logger.warning("没有可用的 OCR 引擎")
             doc.close()
@@ -219,19 +299,19 @@ def extract_keypoints_from_page_images(
     seen_keys: set[str] = set()
     doc = fitz.open(file_path)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with _temporary_ocr_dir() as tmpdir:
         for page_num in pages:
             if page_num > len(doc):
                 continue
             page = doc[page_num - 1]
             pix = page.get_pixmap(dpi=dpi)
-            img_path = Path(tmpdir) / f"page_{page_num}.png"
-            pix.save(str(img_path))
 
             if _PADDLEOCR_AVAILABLE:
+                img_path = Path(tmpdir) / f"page_{page_num}.png"
+                pix.save(str(img_path))
                 ocr_lines = _run_ocr_paddleocr(str(img_path))
             else:
-                ocr_lines = _run_ocr_easyocr(str(img_path))
+                ocr_lines = _run_ocr_easyocr(_pixmap_to_easyocr_image(pix))
 
             for canonical_key, keywords in _OCR_KEYWORDS.items():
                 if canonical_key in seen_keys:
@@ -346,6 +426,22 @@ def _looks_like_label_ocr(text: str, side: ReportSide) -> bool:
     return has_chinese or has_english_word
 
 
+def _is_ratio_metric_key(canonical_key: str) -> bool:
+    markers = ("ratio", "roe", "return", "margin", "spread", "per_share", "eps")
+    return any(marker in canonical_key.lower() for marker in markers)
+
+
+def _valid_ocr_metric_value(canonical_key: str, val: float | None, line: str = "") -> bool:
+    if val is None:
+        return False
+    if abs(val) >= 10:
+        return True
+    lowered = (line or "").lower()
+    if _is_ratio_metric_key(canonical_key) or "%" in lowered or "ratio" in lowered or "roe" in lowered:
+        return abs(val) >= 0.0001
+    return False
+
+
 def _extract_lines_from_ocr(ocr_lines: list[tuple[str, float]]) -> list[str]:
     """将 OCR 行输出合并为文本列表。"""
     return [text for text, conf in ocr_lines if text.strip()]
@@ -369,8 +465,12 @@ def _extract_metrics_from_ocr_lines(
     from ahcc.profile.models import MetricItem
     from ahcc.schemas import Evidence, LocalizedString
 
+    def normalize_ocr_lookup(text: str) -> str:
+        normalized = to_simplified(text)
+        return normalized.replace("诤利润", "净利润").replace("诤利潤", "净利润")
+
     items: list[MetricItem] = []
-    seen_keys: set[str] = set()
+    seen_occurrences: set[tuple[str, int, str]] = set()
 
     # 策略 1：关键词搜索
     all_keywords: dict[str, list[str]] = {}
@@ -385,16 +485,20 @@ def _extract_metrics_from_ocr_lines(
             all_keywords.setdefault(key, []).extend(forms)
 
     for canonical_key, keywords in all_keywords.items():
-        if canonical_key in seen_keys:
-            continue
         for kw in keywords:
             if not kw:
                 continue
             for i, line in enumerate(lines):
                 # 中文用简化字匹配，英文用原始大小写+小写
-                line_cmp = to_simplified(line) if side == ReportSide.A_SHARE else line
-                kw_cmp = to_simplified(kw) if side == ReportSide.A_SHARE else kw
+                line_cmp = normalize_ocr_lookup(line)
+                kw_cmp = normalize_ocr_lookup(kw)
                 if kw_cmp not in line_cmp and kw_cmp.lower() not in line_cmp.lower():
+                    continue
+                line_scope = normalize_ocr_lookup(line).lower()
+                if canonical_key == "net_profit" and any(
+                    marker in line_scope
+                    for marker in ("归属", "股东应占", "attributable", "非经常性", "损益")
+                ):
                     continue
 
                 # 关键词命中，提取数字
@@ -402,13 +506,16 @@ def _extract_metrics_from_ocr_lines(
                 val, val_text = None, None
                 for j in range(i, min(i + 4, len(lines))):
                     val, val_text = _find_first_number_ocr(lines[j], min_abs=0)
-                    if val is not None and abs(val) >= 10:
+                    if _valid_ocr_metric_value(canonical_key, val, lines[j]):
                         break
 
-                if val is None or abs(val) < 10:
+                if not _valid_ocr_metric_value(canonical_key, val, line):
                     continue
                 # 排除年份
                 if 1990 <= val <= 2035 and "." not in (val_text or ""):
+                    continue
+                occurrence_key = (canonical_key, i, val_text or "")
+                if occurrence_key in seen_occurrences:
                     continue
 
                 entry = glossary.get_entry(canonical_key)
@@ -437,10 +544,7 @@ def _extract_metrics_from_ocr_lines(
                         source="generic_pattern",
                     )
                 )
-                seen_keys.add(canonical_key)
-                break
-            if canonical_key in seen_keys:
-                break
+                seen_occurrences.add(occurrence_key)
 
     # 策略 2：表格行模式 "标签    数字"
     # 扫描每一行，若前半部分像标签、后半部分像数字，提取
@@ -454,8 +558,6 @@ def _extract_metrics_from_ocr_lines(
         if not _looks_like_label_ocr(label_part, side):
             continue
         val, val_text = _find_first_number_ocr(num_part, min_abs=0)
-        if val is None or abs(val) < 10:
-            continue
 
         label_simplified = to_simplified(label_part) if side == ReportSide.A_SHARE else label_part
         canonical_key = glossary.lookup(label_part) or glossary.lookup(label_simplified)
@@ -466,7 +568,10 @@ def _extract_metrics_from_ocr_lines(
             conf = 0.4
         if not canonical_key:
             continue
-        if canonical_key in seen_keys:
+        if not _valid_ocr_metric_value(canonical_key, val, line):
+            continue
+        occurrence_key = (canonical_key, i, val_text or "")
+        if occurrence_key in seen_occurrences:
             continue
 
         entry = glossary.get_entry(canonical_key)
@@ -495,7 +600,7 @@ def _extract_metrics_from_ocr_lines(
                 source="generic_pattern",
             )
         )
-        seen_keys.add(canonical_key)
+        seen_occurrences.add(occurrence_key)
 
     return items
 
@@ -504,16 +609,20 @@ def extract_metrics_via_ocr(
     file_path: str,
     side: ReportSide,
     max_pages: int | None = None,
+    pages: list[int] | None = None,
     dpi: int = 200,
     unit: Optional[str] = None,
     currency: Optional[Currency] = None,
+    max_seconds: float | None = None,
+    runtime_status: dict | None = None,
 ) -> list:
     """对 PDF 进行 OCR，提取 MetricItem（供 profile pipeline 调用）。
 
     Args:
         file_path: PDF 路径
         side: A_SHARE / H_SHARE
-        max_pages: Optional debug cap. None scans the full report.
+        max_pages: Optional debug cap. None scans the full report unless pages is provided.
+        pages: Optional explicit 1-based page list for targeted visual checks.
         dpi: 渲染分辨率
         unit: 默认单位
         currency: 默认币种
@@ -533,31 +642,57 @@ def extract_metrics_via_ocr(
 
     doc = fitz.open(file_path)
     total_pages = len(doc)
-    end_page = total_pages if max_pages is None else min(total_pages, max_pages)
-    pages_to_ocr = list(range(1, end_page + 1))
+    if pages is not None:
+        pages_to_ocr = sorted({page for page in pages if 1 <= page <= total_pages})
+    else:
+        end_page = total_pages if max_pages is None else min(total_pages, max_pages)
+        pages_to_ocr = list(range(1, end_page + 1))
 
-    logger.info(f"[OCR] 开始兜底提取: {file_path}, 页数={total_pages}, OCR页={pages_to_ocr[-1] if pages_to_ocr else 0}")
+    page_preview = ",".join(str(page) for page in pages_to_ocr[:12])
+    if len(pages_to_ocr) > 12:
+        page_preview = f"{page_preview},..."
+    logger.info(f"[OCR] 开始兜底提取: {file_path}, 页数={total_pages}, OCR页数={len(pages_to_ocr)}, 页码={page_preview}")
 
     all_items: list = []
+    started = time.monotonic()
+    processed_pages: list[int] = []
+    timed_out = False
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with _temporary_ocr_dir() as tmpdir:
         for page_num in pages_to_ocr:
+            if max_seconds is not None and processed_pages and time.monotonic() - started >= max_seconds:
+                timed_out = True
+                logger.warning(
+                    f"[OCR] time budget exhausted; stop remaining pages: max_seconds={max_seconds}, processed_pages={processed_pages}"
+                )
+                break
             page = doc[page_num - 1]
             pix = page.get_pixmap(dpi=dpi)
-            img_path = Path(tmpdir) / f"page_{page_num}.png"
-            pix.save(str(img_path))
 
             if _PADDLEOCR_AVAILABLE:
+                img_path = Path(tmpdir) / f"page_{page_num}.png"
+                pix.save(str(img_path))
                 ocr_lines = _run_ocr_paddleocr(str(img_path))
             else:
-                ocr_lines = _run_ocr_easyocr(str(img_path))
+                ocr_lines = _run_ocr_easyocr(_pixmap_to_easyocr_image(pix))
 
             lines = _extract_lines_from_ocr(ocr_lines)
             items = _extract_metrics_from_ocr_lines(
                 lines, page_num, side, file_path, unit=unit, currency=currency
             )
             all_items.extend(items)
+            processed_pages.append(page_num)
 
     doc.close()
+    if runtime_status is not None:
+        runtime_status.update(
+            {
+                "candidate_pages": pages_to_ocr,
+                "processed_pages": processed_pages,
+                "processed_page_count": len(processed_pages),
+                "timed_out": timed_out,
+                "elapsed_seconds": round(time.monotonic() - started, 4),
+            }
+        )
     logger.info(f"[OCR] 兜底提取完成: {len(all_items)} 个指标")
     return all_items

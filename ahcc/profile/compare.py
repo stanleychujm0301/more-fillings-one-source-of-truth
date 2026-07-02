@@ -180,6 +180,14 @@ def _within_tolerance(a_value: float, h_value: float, canonical_key: str) -> boo
     return delta <= max(1.0, base * 0.01)
 
 
+def _metric_context_compatible(key: str, a_item: MetricItem, h_item: MetricItem) -> tuple[bool, str]:
+    try:
+        from ahcc.check.numeric import _contexts_compatible
+    except Exception:
+        return True, "context_check_unavailable"
+    return _contexts_compatible(key, a_item, h_item)
+
+
 def _triage(expected: bool, unresolved: bool = False) -> str:
     if expected:
         return "expected"
@@ -216,8 +224,11 @@ def compare_metrics(profile_a: ReportProfile, profile_h: ReportProfile) -> list[
             if not currency_unresolved and _within_tolerance(a_norm, h_norm, key):
                 continue
 
-            triage = _triage(False, unresolved=currency_unresolved)
+            context_compatible, context_note = _metric_context_compatible(key, a_item, h_item)
+            triage = _triage(False, unresolved=currency_unresolved or not context_compatible)
             rationale = None
+            if not context_compatible:
+                rationale = context_note
             if currency_unresolved:
                 rationale = "A/H币种不同，未配置汇率折算，需人工确认折算口径"
 
@@ -510,15 +521,19 @@ def check_internal_consistency(profile: ReportProfile) -> list[ProfileDiff]:
         if not isinstance(occ, MetricOccurrences) or occ.is_internally_consistent:
             continue
         for inc in occ.internal_inconsistencies:
-            severity = _grade_internal_diff(inc.delta_pct)
+            triage = "unresolved" if profile.side == ReportSide.H_SHARE else "real"
+            severity = _severity_for_triage(triage, _grade_internal_diff(inc.delta_pct))
             section_a = inc.item_a.evidence.section or f"第{inc.item_a.page}页"
             section_b = inc.item_b.evidence.section or f"第{inc.item_b.page}页"
             pages = sorted({inc.item_a.page, inc.item_b.page})
+            rationale = None
+            if triage == "unresolved":
+                rationale = "H股自身画像差异来自普通文本/表格抽取，可能涉及同页不同明细行或披露口径，需人工复核后再判定。"
             diffs.append(
                 ProfileDiff(
                     diff_type="internal_inconsistency",
                     severity=severity,
-                    triage="real",
+                    triage=triage,
                     topic=occ.name,
                     summary=LocalizedString(
                         zh=f"{occ.name.zh or occ.canonical_key}: {section_a}为 {inc.item_a.value:,.2f}，{section_b}为 {inc.item_b.value:,.2f}，差异 {inc.delta_pct:.1f}%",
@@ -527,9 +542,10 @@ def check_internal_consistency(profile: ReportProfile) -> list[ProfileDiff]:
                     canonical_key=occ.canonical_key,
                     a_pages=pages if profile.side == ReportSide.A_SHARE else [],
                     h_pages=pages if profile.side == ReportSide.H_SHARE else [],
-                    a_value=inc.item_a.value if profile.side == ReportSide.A_SHARE else None,
-                    h_value=inc.item_a.value if profile.side == ReportSide.H_SHARE else None,
+                    a_value=inc.item_a.value,
+                    h_value=inc.item_b.value,
                     evidence=[inc.item_a.evidence, inc.item_b.evidence],
+                    rationale=rationale,
                     source="profile.internal",
                 )
             )

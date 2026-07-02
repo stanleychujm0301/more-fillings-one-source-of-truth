@@ -12,7 +12,7 @@
 
 ```bash
 docker build -t ahcc-competition .
-docker run --rm -p 8001:8001 -e DEEPSEEK_API_KEY=sk-xxx ahcc-competition
+docker run --rm -p 8001:8080 -e DEEPSEEK_API_KEY=sk-xxx ahcc-competition
 ```
 
 Render/Railway/Fly.io 等支持 Docker Web Service 的平台可直接使用仓库根目录的 `Dockerfile`；Render 可使用 `render.yaml`，并在平台控制台配置 `DEEPSEEK_API_KEY`。部署后用 `/health` 检查服务，再打开公网 `/app#/cockpit` 上传 PDF、生成任务并下载新版 PDF/Excel 报告。
@@ -36,10 +36,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 | 模块 | 说明 |
 |---|---|
 | **底座：数值核查** | 抽取 A/H 年报关键财务指标，识别数值差异与勾稽断裂 |
+| **文本层叠加篡改检测** | 纯 PyMuPDF 检出"错误值覆盖原值"的植入式篡改（主办方 3 组样本 45/45 检出、0 误报，秒级） |
+| **分支机构核查** | 轻量文本抽取比对 A/H 分行资产规模表（光大银行真实对稳定检出 40 处不一致） |
 | **亮点 1：准则差异解读** | 基于 CAS/IFRS 知识库进行 RAG 推理，输出准则引用与解读 |
 | **亮点 2：图表交叉核对** | 多模态比对图表与表格数据，识别图表-表格不一致 |
 
 输出格式：Excel、PDF、Word 工作底稿、PPT 路演稿。
+
+### 任务执行架构
+
+每个核查任务在独立 worker 子进程中执行（`python -m ahcc.worker`），API 服务进程负责监督：
+超时（默认 1800s，`JOB_TIMEOUT_SECONDS`）或心跳失联（默认 300s，`JOB_HEARTBEAT_STALE_SECONDS`）
+时直接 kill 子进程——卡死的 OCR/解析线程不再拖垮服务。同时最多运行
+`JOB_MAX_CONCURRENCY`（默认 1）个任务，其余排队。`JOB_RUNNER=inline` 可回退到
+旧的进程内执行（pytest/eval 默认）。任务级日志见 `storage/jobs/<job_id>/worker.log`，
+服务日志见 `logs/server.log`。
+
+### 样本评估（对应题目"漏检率 ≤5%"）
+
+```bash
+# 快速回归（仅叠加篡改检测，秒级）：
+python scripts/eval_samples.py --samples-dir "F:/毕马威黑客松/样本测试/sample" --overlay-only
+
+# 全 pipeline 评估（写入 storage/eval/eval_baseline.md）：
+python scripts/eval_samples.py --samples-dir "F:/毕马威黑客松/样本测试/sample"
+
+# 真实样本慢速回归（45 处植入错误 + 光大 40 分支差异）：
+AHCC_SAMPLES_DIR="F:/毕马威黑客松/样本测试" python -m pytest -m slow -q
+```
 
 ---
 

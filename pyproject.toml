@@ -55,6 +55,10 @@ heavy = [
     "chromadb>=0.5",               # RAG 向量库
     "sentence-transformers>=3.0",  # BGE-M3 加载
 ]
+ocr = [
+    "paddlepaddle>=2.6",
+    "paddleocr>=2.7",
+]
 all = [
     "ahcc[dev,heavy]",
 ]
@@ -77,3 +81,7 @@ ignore = ["E501"]  # line-too-long 由 formatter 处理
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "slow: 需要真实样本 PDF 的慢速回归（设置 AHCC_SAMPLES_DIR 后运行 pytest -m slow）",
+]
+addopts = "-m 'not slow'"

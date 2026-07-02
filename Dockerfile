@@ -18,6 +18,7 @@ FROM ${PYTHON_IMAGE} AS runtime
 ARG USE_ALIYUN_APT_MIRROR=0
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_TRUSTED_HOST=pypi.org
+ARG INSTALL_OCR=1
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -56,7 +57,11 @@ COPY ui ./ui
 COPY --from=ui-builder /app/ui-new/dist ./ui-new/dist
 
 RUN python -m pip install --upgrade pip -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
-    && python -m pip install --no-cache-dir -e . -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
+    && if [ "${INSTALL_OCR}" = "1" ]; then \
+        python -m pip install --no-cache-dir -e ".[ocr]" -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}"; \
+    else \
+        python -m pip install --no-cache-dir -e . -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}"; \
+    fi \
     && mkdir -p /var/data/storage
 
 EXPOSE 8080

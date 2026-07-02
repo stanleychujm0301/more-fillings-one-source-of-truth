@@ -15,9 +15,11 @@ from ahcc.schemas import (
     DiffSeverity,
     DiffType,
     Evidence,
+    Language,
     LocalizedString,
     ReportDocument,
     ReportSide,
+    TextSegment,
 )
 from ahcc.check.explanation import make_value_explanation
 
@@ -216,6 +218,7 @@ def compare_branch_tables(
                     diff_id=f"BRANCH_{name}",
                     diff_type=DiffType.DISCLOSURE,
                     severity=severity,
+                    triage="real",
                     canonical_key=None,
                     topic=LocalizedString(
                         zh=f"分支机构资产规模：{name}",
@@ -239,7 +242,7 @@ def compare_branch_tables(
                         h_value=h_asset,
                         delta=delta,
                         evidence=evidence,
-                        review_hint="该分支机构名称和机构数量已匹配，优先核对同一行资产规模披露。",
+                        review_hint="该分支机构名称和机构数量已匹配，但跨报告分支资产规模可能存在地区口径、币种单位或披露范围差异；需人工复核同一行披露后再判定。",
                     ),
                     standard_reasoning=None,
                     chart_cross=None,
@@ -256,6 +259,56 @@ def compare_branch_tables(
         len(diffs),
     )
     return diffs
+
+
+def load_branch_lightweight_doc(file_path: str, side: ReportSide) -> ReportDocument:
+    """轻量抽取纯页面文本，用于分支机构核查——只需文本层，不需要完整 parser 管线
+    （表格/图表/OCR），因此不受 profile 解析失败或超时预算影响，可在主 pipeline 内
+    与 profile 构建并行独立跑，确保分支机构差异每次都能确定性产出。"""
+    try:
+        import fitz
+    except ImportError:
+        from ahcc.parser import parse_report
+
+        return parse_report(file_path, side)
+
+    pdf = fitz.open(file_path)
+    texts: list[TextSegment] = []
+    try:
+        for page_number, page in enumerate(pdf, start=1):
+            text = page.get_text("text")
+            if not text:
+                continue
+            texts.append(
+                TextSegment(
+                    segment_id=f"{side.value}-branch-{page_number}",
+                    page=page_number,
+                    bbox=(0, 0, 1, 1),
+                    text=text,
+                    language=Language.ZH,
+                )
+            )
+        total_pages = pdf.page_count
+    finally:
+        pdf.close()
+    return ReportDocument(
+        doc_id=f"{side.value}-branch-lightweight",
+        side=side,
+        file_path=file_path,
+        total_pages=total_pages,
+        primary_language=Language.ZH,
+        texts=texts,
+    )
+
+
+def run_branch_checks(a_file: str, h_file: str) -> tuple[list[Diff], dict[str, object]]:
+    """分支机构核查主入口 —— 主 pipeline CHECKING 阶段调用，与 numeric/disclosure 等
+    检查并行执行，独立于 profile 解析是否成功。"""
+    doc_a = load_branch_lightweight_doc(a_file, ReportSide.A_SHARE)
+    doc_h = load_branch_lightweight_doc(h_file, ReportSide.H_SHARE)
+    diffs = compare_branch_tables(doc_a, doc_h)
+    diagnostics = branch_table_diagnostics(doc_a, doc_h, diffs)
+    return diffs, diagnostics
 
 
 def _count_branch_asset_diffs(a_branches: dict[str, dict], h_branches: dict[str, dict], matched_names: list[str]) -> int:

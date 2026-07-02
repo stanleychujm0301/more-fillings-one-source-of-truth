@@ -35,6 +35,11 @@ class ExpectedDiff:
     a_page: int | None = None
     h_page: int | None = None
     note: str = ""
+    # 官方错误清单格式专属字段（序号/PDF页码/描述/原始数字/错误数字）
+    page: int | None = None
+    original_value: str = ""
+    tampered_value: str = ""
+    description: str = ""
 
 
 @dataclass
@@ -59,13 +64,19 @@ class EvalReport:
 
 
 def load_answer_key(path: Path) -> list[ExpectedDiff]:
-    """读取预期答案 Excel，表头需含 pair_id/company/expected_rule_id/topic/expected_severity/a_page/h_page/note。"""
+    """读取预期答案 Excel。自动嗅探表头格式：
+
+    - 官方错误清单格式（序号/PDF页码/描述/原始数字/错误数字/…）→ load_official_answer_key
+    - 内部格式（pair_id/expected_rule_id/topic/…）→ 原逻辑
+    """
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return []
     header = [str(c or "").strip().lower() for c in rows[0]]
+    if _is_official_answer_header(header):
+        return _parse_official_answer_rows(rows)
 
     def idx(name: str) -> int | None:
         return header.index(name) if name in header else None
@@ -101,6 +112,116 @@ def load_answer_key(path: Path) -> list[ExpectedDiff]:
     return expected
 
 
+_OFFICIAL_HEADER_KEYS = ("pdf页码", "原始数字", "错误数字")
+
+
+def _is_official_answer_header(header: list[str]) -> bool:
+    joined = "".join(header)
+    return all(key in joined for key in _OFFICIAL_HEADER_KEYS)
+
+
+def load_official_answer_key(path: Path) -> list[ExpectedDiff]:
+    """读取主办方官方错误清单（列：序号/PDF页码/描述/原始数字/错误数字/差异额/变动说明）。"""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    rows = list(wb.active.iter_rows(values_only=True))
+    return _parse_official_answer_rows(rows) if rows else []
+
+
+def _parse_official_answer_rows(rows: list[tuple]) -> list[ExpectedDiff]:
+    header = [str(c or "").strip().lower() for c in rows[0]]
+
+    def idx_of(*names: str) -> int | None:
+        for i, cell in enumerate(header):
+            if any(name in cell for name in names):
+                return i
+        return None
+
+    page_idx = idx_of("pdf页码", "页码")
+    desc_idx = idx_of("描述")
+    orig_idx = idx_of("原始数字", "原始")
+    tamp_idx = idx_of("错误数字", "错误")
+    note_idx = idx_of("变动说明", "说明")
+
+    def cell(row: tuple, i: int | None) -> str:
+        if i is None or i >= len(row) or row[i] is None:
+            return ""
+        return str(row[i]).strip()
+
+    expected: list[ExpectedDiff] = []
+    for row in rows[1:]:
+        page_text = cell(row, page_idx)
+        tampered = cell(row, tamp_idx)
+        if not page_text or not tampered:
+            continue
+        try:
+            page = int(float(page_text))
+        except ValueError:
+            continue
+        expected.append(
+            ExpectedDiff(
+                topic=cell(row, desc_idx),
+                page=page,
+                a_page=page,  # 植入错误都在 A 股侧，页码同时供旧的页码接近判断使用
+                original_value=cell(row, orig_idx),
+                tampered_value=tampered,
+                description=cell(row, desc_idx),
+                note=cell(row, note_idx),
+            )
+        )
+    return expected
+
+
+def _normalize_value_text(text: str) -> str:
+    """数值文本规范化：去千分位逗号/括号/百分号/空格，用于跨格式匹配。"""
+    return (
+        str(text)
+        .replace(",", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("%", "")
+        .replace(" ", "")
+        .strip()
+    )
+
+
+def _diff_value_texts(diff: Diff) -> str:
+    """把 diff 中所有可能包含数值的文本拼成一个规范化后的检索串。"""
+    parts: list[str] = []
+    for value in (diff.a_value, diff.h_value):
+        if value is None:
+            continue
+        parts.append(f"{value:.4f}".rstrip("0").rstrip("."))
+        parts.append(f"{value:,.2f}")
+        if value == int(value):
+            parts.append(f"{int(value):,}")
+            parts.append(str(int(value)))
+    parts.extend(filter(None, [diff.summary.zh, diff.summary.en]))
+    parts.extend(ev.snippet or "" for ev in diff.evidence)
+    return _normalize_value_text(" ".join(parts))
+
+
+def _match_by_values(diff: Diff, exp: ExpectedDiff) -> tuple[str, str]:
+    """官方错误清单的值匹配：页码接近 + 错误数字/原始数字出现在 diff 的值或文本里。"""
+    if not exp.tampered_value and not exp.original_value:
+        return "", ""
+    a_page, h_page = _diff_pages(diff)
+    diff_page = a_page if a_page is not None else h_page
+    if exp.page is not None and diff_page is not None and abs(diff_page - exp.page) > 2:
+        return "", ""
+    haystack = _diff_value_texts(diff)
+    tampered = _normalize_value_text(exp.tampered_value) if exp.tampered_value else ""
+    original = _normalize_value_text(exp.original_value) if exp.original_value else ""
+    tampered_hit = bool(tampered) and tampered in haystack
+    original_hit = bool(original) and original in haystack
+    if tampered_hit and original_hit:
+        return "exact", f"错误值 {exp.tampered_value} 与原始值 {exp.original_value} 均命中"
+    if tampered_hit:
+        return "prefix", f"错误值 {exp.tampered_value} 命中"
+    if original_hit:
+        return "prefix", f"原始值 {exp.original_value} 命中"
+    return "", ""
+
+
 def _diff_pages(diff: Diff) -> tuple[int | None, int | None]:
     a_page = None
     h_page = None
@@ -133,6 +254,11 @@ def _page_close(a: int | None, b: int | None, tol: int = _PAGE_TOLERANCE) -> boo
 
 def _match_diff_to_expected(diff: Diff, exp: ExpectedDiff) -> tuple[str, str]:
     """返回 (匹配级别, 原因)；不匹配返回 ("", "")。"""
+    # 0. 官方错误清单：按 页码+数值 匹配（优先级最高，命中即返回）
+    level, reason = _match_by_values(diff, exp)
+    if level:
+        return level, reason
+
     a_page, h_page = _diff_pages(diff)
     pages_ok = _page_close(a_page, exp.a_page) and _page_close(h_page, exp.h_page)
 

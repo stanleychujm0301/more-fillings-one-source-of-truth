@@ -36,7 +36,7 @@ def _patch_report_job(monkeypatch, workspace_tmp: Path, job_id: str = "j-downloa
             "h_file": "h.pdf",
             "status": "done",
             "coverage_items": [],
-            "comparison_summary": {"result_version": 11},
+            "comparison_summary": {"result_version": 12},
         }
         if requested_job_id == job_id
         else None,
@@ -220,7 +220,7 @@ def _stale_branch_job_payload(job_id: str, a_file: Path, h_file: Path) -> dict:
         "status": "done",
         "coverage_items": [],
         "comparison_summary": {
-            "result_version": 11,
+            "result_version": 12,
             "extraction_engine_version": "2026-06-01.4",
             "real_diff_count": 0,
             "expected_diff_count": 0,

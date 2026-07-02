@@ -97,3 +97,24 @@ PYTHON_IMAGE=python:3.12-slim
 
 If Zeabur returns 502, confirm the service exposes port `8080`, the container
 is healthy, and `/health` responds first.
+
+## 5. 502 Troubleshooting
+
+`502 Bad Gateway` from the Zeabur domain means the Zeabur gateway is reachable,
+but it cannot connect to the running container. It is not a React hash-route
+problem. Check these items in order:
+
+1. The service is using the latest GitHub commit on `main`.
+2. The service type is Dockerfile / Docker, not Node.js, Vite, or Static Site.
+3. The exposed service port is `8080`; keep `PORT=8080` or leave `PORT` unset.
+4. The runtime log shows Uvicorn starting with:
+
+```text
+Uvicorn running on http://0.0.0.0:8080
+AHCC 启动：extraction_engine=2026-06-01.3 result_version=11
+```
+
+If the runtime log does not contain those lines, copy the first Python traceback
+or container error from Zeabur logs. Common causes are a stale deployment commit,
+wrong service type, wrong port, failed Docker image build, or a container crash
+before Uvicorn starts.

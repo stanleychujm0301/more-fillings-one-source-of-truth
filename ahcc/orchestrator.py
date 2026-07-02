@@ -10,13 +10,14 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
 from ahcc.config import settings
 from ahcc.schemas import (
     DisclosureCoverageItem,
+    DiffScope,
     Evidence,
     Job,
     JobProgress,
@@ -25,6 +26,7 @@ from ahcc.schemas import (
     ReportDocument,
     ReportSide,
 )
+from ahcc.storage.repository import _CURRENT_RESULT_VERSION, running_progress_summary
 
 
 class Orchestrator:
@@ -32,6 +34,9 @@ class Orchestrator:
 
     def __init__(self) -> None:
         settings.ensure_dirs()
+        self._progress_callback: Callable[[Job], None] | None = None
+        self._visual_ocr_status: dict[str, Any] | None = None
+        self._branch_diagnostics: dict[str, Any] | None = None
 
     async def run(
         self,
@@ -40,8 +45,11 @@ class Orchestrator:
         company_name: str | None = None,
         check_mode: str = "ah",
         bilingual_level: str = "fast",
+        visual_review_mode: str = "off",
         job: Job | None = None,
+        progress_callback: Callable[[Job], None] | None = None,
     ) -> Job:
+        self._progress_callback = progress_callback
         job = job or Job(
             job_id=str(uuid.uuid4())[:8],
             company_name=company_name,
@@ -61,7 +69,7 @@ class Orchestrator:
 
             async def _parse_side(file_path: str, side: ReportSide) -> ReportDocument:
                 doc = await self._parse(file_path, side)
-                if not settings.demo_mode:
+                if not settings.demo_mode and settings.enable_chart_vlm_check:
                     doc = await self._detect_charts(doc, job.job_id)
                 return doc
 
@@ -88,33 +96,78 @@ class Orchestrator:
             # numeric/disclosure 为 CPU（各自 to_thread），standard 为 LLM async，三者相互独立可并发。
             self._emit(job, JobStatus.CHECKING, 55, "画像比对 + 数值/准则/披露并行检测")
             module_warnings: list[dict] = []
-            numeric_diffs, standard_diffs, disclosure_diffs = await asyncio.gather(
+            visual_ocr_status: dict[str, Any] = {}
+            self._visual_ocr_status = visual_ocr_status
+            async def _empty_diffs() -> list:
+                return []
+
+            numeric_diffs, standard_diffs, disclosure_diffs, tamper_diffs, overlay_diffs, branch_diffs = await asyncio.gather(
                 self._safe_check(self._check_numeric_profiles(profile_a, profile_h), job, "数值检查", [], module_warnings, 60),
-                self._safe_check(self._check_standard_profiles(profile_a, profile_h), job, "准则检查（RAG）", [], module_warnings, 65),
+                self._safe_check(self._check_standard_profiles(profile_a, profile_h), job, "准则检查（RAG）", [], module_warnings, 65)
+                if settings.enable_standard_check
+                else _empty_diffs(),
                 self._safe_check(self._check_disclosure_profiles(profile_a, profile_h), job, "披露检查", [], module_warnings, 70),
+                self._safe_check(
+                    self._check_key_metric_tamper(
+                        profile_a,
+                        profile_h,
+                        visual_review_mode=visual_review_mode,
+                    ),
+                    job,
+                    "视觉 OCR 抽样复核",
+                    [],
+                    module_warnings,
+                    75,
+                ),
+                self._safe_check(self._check_text_overlay(a_file, h_file), job, "文本层叠加篡改检测", [], module_warnings, 72)
+                if settings.enable_text_overlay_check
+                else _empty_diffs(),
+                self._safe_check(self._check_branch(a_file, h_file), job, "分支机构核查", [], module_warnings, 73),
             )
-            self._emit(job, JobStatus.CHECKING, 80, "披露覆盖与跨页事件核查")
-            coverage_items, event_diffs = await self._safe_check(
-                self._build_disclosure_coverage(profile_a, profile_h),
-                job,
-                "披露覆盖核查",
-                ([], []),
-                module_warnings,
-                85,
-            )
+            visual_warning = self._visual_ocr_warning(visual_ocr_status)
+            if visual_warning:
+                module_warnings.append(visual_warning)
+            coverage_items, event_diffs = [], []
+            if settings.enable_disclosure_coverage_check:
+                self._emit(job, JobStatus.CHECKING, 80, "披露覆盖与跨页事件核查")
+                coverage_items, event_diffs = await self._safe_check(
+                    self._build_disclosure_coverage(profile_a, profile_h),
+                    job,
+                    "披露覆盖核查",
+                    ([], []),
+                    module_warnings,
+                    85,
+                )
             job.coverage_items = coverage_items
 
             chart_diffs = []
-            if not settings.demo_mode:
+            if not settings.demo_mode and settings.enable_chart_vlm_check:
                 self._emit(job, JobStatus.CHECKING, 90, "图表三方交叉核对")
                 chart_diffs = await self._safe_check(self._check_chart(doc_a, doc_h), job, "图表核对（VLM）", [], module_warnings, 92)
 
-            job.diffs = [*numeric_diffs, *standard_diffs, *disclosure_diffs, *event_diffs, *chart_diffs]
+            job.diffs = [
+                *numeric_diffs,
+                *tamper_diffs,
+                *standard_diffs,
+                *disclosure_diffs,
+                *event_diffs,
+                *chart_diffs,
+                *overlay_diffs,
+                *branch_diffs,
+            ]
+            job.diffs = self._dedupe_overlay_shadows(job.diffs)
 
             # ---------- 阶段 4：报告 ----------
             # 先结算汇总与耗时，再生成报告 —— 确保报告内「核查耗时/生成时间/提取预警」取到真实值
             self._emit(job, JobStatus.REPORTING, 95, "生成报告")
-            job.comparison_summary = self._build_comparison_summary(job, profile_a, profile_h, module_warnings=module_warnings)
+            job.comparison_summary = self._build_comparison_summary(
+                job,
+                profile_a,
+                profile_h,
+                visual_review_mode=visual_review_mode,
+                module_warnings=module_warnings,
+            )
+            job.comparison_summary["visual_ocr_status"] = visual_ocr_status or {"mode": visual_review_mode}
             job.finished_at = datetime.utcnow()
             job.duration_seconds = (job.finished_at - job.started_at).total_seconds()
 
@@ -254,7 +307,8 @@ class Orchestrator:
 
         out_dir = settings.storage_dir / "charts" / job_id / doc.side.value
         try:
-            charts = await asyncio.to_thread(detect_charts, doc.file_path, out_dir, max_pages=None)
+            max_pages = max(int(getattr(settings, "chart_detection_max_pages", 60) or 60), 1)
+            charts = await asyncio.to_thread(detect_charts, doc.file_path, out_dir, max_pages=max_pages)
         except Exception as exc:  # noqa: BLE001
             add_audit_warning(doc, "chart_detection_failed", f"Chart detection failed: {exc}")
             logger.warning(f"图表检测失败: {exc}")
@@ -277,10 +331,93 @@ class Orchestrator:
         from ahcc.check.numeric import run_numeric_checks_on_profiles
         return await asyncio.to_thread(run_numeric_checks_on_profiles, profile_a, profile_h)
 
+    async def _check_key_metric_tamper(
+        self,
+        profile_a,
+        profile_h,
+        *,
+        visual_review_mode: str = "off",
+        visual_ocr_status: dict[str, Any] | None = None,
+    ):
+        """指标精确差异与视觉层篡改检测，作为全量画像核查的补充。"""
+        from ahcc.check.key_metric_tamper import run_key_metric_tamper_checks
+        return await asyncio.to_thread(
+            run_key_metric_tamper_checks,
+            profile_a,
+            profile_h,
+            visual_review_mode=visual_review_mode,
+            visual_ocr_status=visual_ocr_status if visual_ocr_status is not None else self._visual_ocr_status,
+        )
+
     async def _check_standard_profiles(self, profile_a, profile_h):
         """准则差异智能解读（基于画像）。"""
         from ahcc.check.standard import run_standard_checks_on_profiles
         return await run_standard_checks_on_profiles(profile_a, profile_h)
+
+    async def _check_text_overlay(self, a_file: str, h_file: str):
+        """文本层叠加篡改检测：纯 fitz 扫描，不依赖 profile 解析结果，独立于 visual_review_mode。"""
+        from ahcc.check.text_overlay_tamper import run_text_overlay_checks
+        return await asyncio.to_thread(run_text_overlay_checks, a_file, h_file)
+
+    async def _check_branch(self, a_file: str, h_file: str):
+        """分支机构资产规模核查：轻量 fitz 文本抽取，不依赖 profile.source_doc 是否可用。"""
+        from ahcc.check.branch_disclosure import run_branch_checks
+        diffs, diagnostics = await asyncio.to_thread(run_branch_checks, a_file, h_file)
+        self._branch_diagnostics = diagnostics
+        return diffs
+
+    @staticmethod
+    def _dedupe_overlay_shadows(diffs: list) -> list:
+        """去重：视觉 OCR 复核（visual_text_layer_mismatch）与 profile 内部一致性检查可能
+        对同一处文本层叠加篡改重复产出 Diff。以 text_overlay_tamper 为准，剔除同侧同页、
+        数值对相同（允许相差 10 的整数次幂——视觉层常把"百万元"换算成"元"）的重复项，
+        避免同一处植入错误在报告里出现两遍、评估时被误算作误报。"""
+        import math
+
+        overlay_pairs: dict[tuple[str, int], list[tuple[float, float]]] = {}
+        for d in diffs:
+            if d.rule_id != "text_overlay_tamper" or not d.evidence:
+                continue
+            if d.a_value is None or d.h_value is None:
+                continue
+            key = (d.evidence[0].side.value, d.evidence[0].page)
+            overlay_pairs.setdefault(key, []).append((d.a_value, d.h_value))
+
+        def _scaled_equal(x: float, u: float) -> float | None:
+            """x ≈ u * 10^n 时返回缩放系数 10^n，否则 None。"""
+            if not x or not u:
+                return None
+            ratio = abs(x / u)
+            if ratio <= 0:
+                return None
+            exponent = math.log10(ratio)
+            nearest = round(exponent)
+            if abs(exponent - nearest) > 1e-6:
+                return None
+            return 10.0 ** nearest
+
+        def _pair_matches(x: float, y: float, u: float, v: float) -> bool:
+            for a, b in ((u, v), (v, u)):
+                k1 = _scaled_equal(x, a)
+                k2 = _scaled_equal(y, b)
+                if k1 is not None and k2 is not None and abs(k1 - k2) < 1e-9:
+                    return True
+            return False
+
+        def _is_shadow(d) -> bool:
+            if d.rule_id == "text_overlay_tamper":
+                return False
+            if d.diff_type.value != "internal":
+                return False
+            if not d.evidence or d.a_value is None or d.h_value is None:
+                return False
+            key = (d.evidence[0].side.value, d.evidence[0].page)
+            return any(
+                _pair_matches(d.a_value, d.h_value, u, v)
+                for u, v in overlay_pairs.get(key, [])
+            )
+
+        return [d for d in diffs if not _is_shadow(d)]
 
     async def _check_disclosure_profiles(self, profile_a, profile_h):
         """披露差异检查（基于画像）。"""
@@ -545,7 +682,19 @@ class Orchestrator:
         progress = JobProgress(stage=stage, percent=percent, message=message)
         job.progress.append(progress)
         job.status = stage
+        job.comparison_summary = running_progress_summary(
+            job.comparison_summary,
+            stage,
+            percent,
+            message,
+            now=progress.updated_at,
+        )
         logger.info(f"[{job.job_id}] {percent:>3}% [{stage}] {message}")
+        if self._progress_callback:
+            try:
+                self._progress_callback(job)
+            except Exception:  # noqa: BLE001
+                logger.exception(f"[{job.job_id}] progress persistence failed")
 
     async def _safe_check(
         self,
@@ -602,7 +751,7 @@ class Orchestrator:
         zh_parser_cache = (getattr(doc_zh, "metadata", {}) or {}).get("parser_cache") or {}
         en_parser_cache = (getattr(doc_en, "metadata", {}) or {}).get("parser_cache") or {}
         return {
-            "result_version": 11,
+            "result_version": _CURRENT_RESULT_VERSION,
             "parser_version": PARSER_VERSION,
             "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
             "stale_result": False,
@@ -660,12 +809,46 @@ class Orchestrator:
             "h_extraction_audit": self._doc_audit_payload(doc_en),
         }
 
+    @staticmethod
+    def _diff_scope_counts(diffs) -> dict[str, dict[str, int]]:
+        triages = ("real", "unresolved", "expected")
+        scopes = (
+            DiffScope.CROSS_REPORT.value,
+            DiffScope.A_INTERNAL.value,
+            DiffScope.H_INTERNAL.value,
+        )
+        counts = {triage: {scope: 0 for scope in scopes} for triage in triages}
+        for diff in diffs:
+            triage = diff.triage if diff.triage in counts else "unresolved"
+            scope_value = Orchestrator._normalized_diff_scope_value(diff)
+            if scope_value not in counts[triage]:
+                scope_value = DiffScope.CROSS_REPORT.value
+            counts[triage][scope_value] += 1
+        return counts
+
+    @staticmethod
+    def _normalized_diff_scope_value(diff) -> str:
+        scope = getattr(diff, "diff_scope", DiffScope.CROSS_REPORT)
+        scope_value = scope.value if isinstance(scope, DiffScope) else str(scope or DiffScope.CROSS_REPORT.value)
+        if scope_value in {DiffScope.A_INTERNAL.value, DiffScope.H_INTERNAL.value}:
+            return scope_value
+        diff_type = getattr(getattr(diff, "diff_type", None), "value", getattr(diff, "diff_type", ""))
+        if diff_type == "internal":
+            sides = {getattr(evidence.side, "value", evidence.side) for evidence in getattr(diff, "evidence", [])}
+            if sides == {"A"}:
+                return DiffScope.A_INTERNAL.value
+            if sides == {"H"}:
+                return DiffScope.H_INTERNAL.value
+        return DiffScope.CROSS_REPORT.value
+
     def _build_comparison_summary(
         self,
         job: Job,
         profile_a,
         profile_h,
         *,
+        visual_review_mode: str = "off",
+        visual_ocr_status: dict | None = None,
         module_warnings: list | None = None,
     ) -> dict:
         from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION
@@ -677,7 +860,9 @@ class Orchestrator:
         doc_h = getattr(profile_h, "source_doc", None)
         a_parser_cache = self._doc_parser_cache_payload(doc_a, profile_a)
         h_parser_cache = self._doc_parser_cache_payload(doc_h, profile_h)
-        branch_diagnostics = branch_table_diagnostics(doc_a, doc_h, job.diffs)
+        # 分支机构诊断优先取主 pipeline 里 _check_branch 用轻量 fitz doc 算出的结果
+        # （不依赖 profile.source_doc 是否解析成功）；该检查被禁用/失败时才退回旧路径。
+        branch_diagnostics = self._branch_diagnostics or branch_table_diagnostics(doc_a, doc_h, job.diffs)
         branch_warnings = self._branch_diagnostic_warnings(doc_a, doc_h, branch_diagnostics)
         warnings = [
             *self._collect_extraction_warnings(profile_a, profile_h),
@@ -686,12 +871,15 @@ class Orchestrator:
         ]
         blocking_warnings = [item for item in warnings if item.get("blocking")]
         auxiliary_warnings = [item for item in warnings if item.get("category") == "auxiliary_chart"]
+        diff_scope_counts = self._diff_scope_counts(job.diffs)
         return {
-            "result_version": 11,
+            "result_version": _CURRENT_RESULT_VERSION,
             "parser_version": PARSER_VERSION,
             "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
             "stale_result": False,
             "check_mode": "ah",
+            "visual_review_mode": visual_review_mode,
+            "visual_ocr_status": visual_ocr_status or {"mode": visual_review_mode},
             "mode_label": "A+H股报告检查",
             "side_labels": {"A": "A", "H": "H"},
             "a_file_sha256": self._file_sha256(job.a_file),
@@ -708,7 +896,24 @@ class Orchestrator:
             "unresolved_candidate_count": sum(1 for d in job.diffs if d.rule_id == "low_confidence_candidate"),
             "currency_converted_match_count": sum(1 for d in job.diffs if d.rule_id == "currency_converted_match"),
             "context_mismatch_count": sum(1 for d in job.diffs if d.rule_id == "context_mismatch"),
+            "llm_semantic_review_count": sum(1 for d in job.diffs if d.rule_id == "llm_semantic_review"),
             "internal_inconsistency_count": sum(1 for d in job.diffs if d.diff_type.value == "internal"),
+            "key_metric_exact_diff_count": sum(1 for d in job.diffs if d.rule_id == "key_metric_exact_mismatch"),
+            "visual_text_layer_mismatch_count": sum(1 for d in job.diffs if d.rule_id == "visual_text_layer_mismatch"),
+            "internal_event_diff_count": sum(1 for d in job.diffs if d.rule_id == "event_internal_fact_match"),
+            "diff_scope_counts": diff_scope_counts,
+            "cross_report_diff_count": sum(
+                diff_scope_counts[triage][DiffScope.CROSS_REPORT.value]
+                for triage in ("real", "unresolved", "expected")
+            ),
+            "a_internal_diff_count": sum(
+                diff_scope_counts[triage][DiffScope.A_INTERNAL.value]
+                for triage in ("real", "unresolved", "expected")
+            ),
+            "h_internal_diff_count": sum(
+                diff_scope_counts[triage][DiffScope.H_INTERNAL.value]
+                for triage in ("real", "unresolved", "expected")
+            ),
             "coverage_count": len(job.coverage_items),
             "matched_event_count": sum(1 for item in job.coverage_items if item.category == "event" and item.status == "matched"),
             "a_only_count": sum(1 for item in job.coverage_items if item.status == "a_only"),
@@ -730,4 +935,36 @@ class Orchestrator:
             "warnings": warnings,
             "a_extraction_audit": a_audit,
             "h_extraction_audit": h_audit,
+        }
+
+    def _visual_ocr_warning(self, visual_ocr_status: dict | None) -> dict | None:
+        if not visual_ocr_status:
+            return None
+        reason = visual_ocr_status.get("skipped_reason")
+        timed_out = any(
+            bool(side.get("timed_out"))
+            for side in (visual_ocr_status.get("sides") or {}).values()
+            if isinstance(side, dict)
+        )
+        if not reason and not timed_out:
+            return None
+        if reason == "runtime_ocr_disabled":
+            message = "Runtime visual OCR is disabled for completion-first review; text/table layers were still checked."
+            severity = "low"
+        elif reason == "easyocr_large_pdf":
+            message = "Runtime visual OCR was skipped because only EasyOCR is available and the PDF is large."
+            severity = "medium"
+        elif timed_out:
+            message = "Runtime visual OCR reached its page/time budget; partial OCR results were retained."
+            severity = "medium"
+        else:
+            message = f"Runtime visual OCR was skipped: {reason}"
+            severity = "medium"
+        return {
+            "side": "",
+            "flag": "visual_ocr_skipped" if reason else "visual_ocr_budget_exhausted",
+            "message": message,
+            "category": "visual_ocr",
+            "severity": severity,
+            "blocking": False,
         }

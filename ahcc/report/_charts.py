@@ -30,7 +30,15 @@ def _ensure_mpl() -> bool:
         import matplotlib
 
         matplotlib.use("Agg", force=True)
-        matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "sans-serif"]
+        # Microsoft YaHei/SimHei only exist on Windows; Linux containers (Zeabur/
+        # Docker) install "Noto Sans CJK SC" via apt — list it so chart labels
+        # don't render as missing-glyph boxes in production.
+        matplotlib.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei",
+            "Noto Sans CJK SC",
+            "SimHei",
+            "sans-serif",
+        ]
         matplotlib.rcParams["font.family"] = "sans-serif"
         matplotlib.rcParams["axes.unicode_minus"] = False
         _MPL_READY = True

@@ -16,16 +16,18 @@
 .PARAMETER Port
   Listen port, default 8000.
 
-.PARAMETER NoReload
-  Disable --reload (more stable for demo; editing files will not trigger a reload).
+.PARAMETER Reload
+  Enable --reload for development. OFF by default: a reload kills every running
+  check job mid-flight (jobs get marked "service restarted before the task
+  completed"), so auto-reload is opt-in now.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_server.ps1
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_server.ps1 -Port 8000 -NoReload
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_server.ps1 -Port 8000 -Reload
 #>
 param(
     [int]$Port = 8000,
-    [switch]$NoReload
+    [switch]$Reload
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,9 +88,9 @@ $logFile = Join-Path $logDir ("server_{0}.log" -f (Get-Date -Format "yyyyMMdd_HH
 $env:PYTHONIOENCODING = "utf-8"
 
 $uvArgs = @("-m", "uvicorn", "ahcc.api.main:app", "--host", "127.0.0.1", "--port", "$Port")
-if (-not $NoReload) { $uvArgs += @("--reload", "--reload-dir", "ahcc", "--reload-dir", "ui") }
+if ($Reload) { $uvArgs += @("--reload", "--reload-dir", "ahcc", "--reload-dir", "ui") }
 
-Write-Host "[AHCC] starting backend port=$Port reload=$(-not $NoReload)"
+Write-Host "[AHCC] starting backend port=$Port reload=$([bool]$Reload)"
 Write-Host "[AHCC] log: $logFile"
 Write-Host "[AHCC] open http://127.0.0.1:$Port/ in browser; Ctrl+C to stop."
 

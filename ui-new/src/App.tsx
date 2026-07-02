@@ -163,6 +163,7 @@ type ProfilePayload = {
 type DiffItem = {
   diff_id: string
   diff_type: string
+  diff_scope?: DiffSourceScope | string | null
   severity: string
   triage?: string
   canonical_key?: string | null
@@ -201,6 +202,7 @@ type UploadState = {
   companyName: string
   checkMode: 'ah' | 'h_bilingual'
   bilingualLevel: 'fast' | 'strict'
+  visualReviewMode: 'off' | 'smart' | 'strict'
   aFile: File | null
   hFile: File | null
 }
@@ -219,6 +221,7 @@ const EMPTY_UPLOAD: UploadState = {
   companyName: '',
   checkMode: 'ah',
   bilingualLevel: 'fast',
+  visualReviewMode: 'off',
   aFile: null,
   hFile: null,
 }
@@ -404,12 +407,6 @@ function diffRatio(aValue: unknown, hValue: unknown): string {
   return `${(Math.abs((h - a) / Math.abs(a)) * 100).toFixed(2)}%`
 }
 
-function formatRatio(value: number): string {
-  if (!Number.isFinite(value)) return '—'
-  const normalized = value > 1 ? value / 100 : value
-  return `${(normalized * 100).toFixed(1)}%`
-}
-
 function bboxText(bbox?: [number, number, number, number] | null): string {
   if (!bbox?.length) return '无坐标'
   return bbox.map((value) => Number(value).toFixed(1)).join(', ')
@@ -455,14 +452,60 @@ function reviewValues(diff: DiffItem) {
   }
 }
 
-type DiffScope = 'all' | 'real' | 'unresolved' | 'expected' | 'coverage'
+type DiffTriageScope = 'real' | 'unresolved' | 'expected'
+type DiffSourceScope = 'cross_report' | 'a_internal' | 'h_internal'
+
+const DIFF_TRIAGE_GROUPS: Array<{ key: DiffTriageScope; label: string; tone: string }> = [
+  { key: 'real', label: '真实差异', tone: 'critical' },
+  { key: 'unresolved', label: '待人工复核差异', tone: 'warning' },
+  { key: 'expected', label: '预期差异', tone: 'expected' },
+]
+
+const DIFF_SOURCE_GROUPS: Array<{ key: DiffSourceScope; label: string; description: string }> = [
+  { key: 'cross_report', label: 'A/H报告不一致', description: 'A/H报告之间的不一致差异' },
+  { key: 'a_internal', label: 'A股自身问题', description: 'A股报告自身存在的差异问题' },
+  { key: 'h_internal', label: 'H股自身问题', description: 'H股报告自身存在的差异问题' },
+]
+
+function normalizedTriageScope(diff: DiffItem): DiffTriageScope {
+  if (diff.triage === 'expected') return 'expected'
+  if (diff.triage === 'unresolved') return 'unresolved'
+  return 'real'
+}
+
+function normalizedDiffScope(diff: DiffItem): DiffSourceScope {
+  if (diff.diff_scope === 'a_internal' || diff.diff_scope === 'h_internal') {
+    return diff.diff_scope
+  }
+  if (diff.diff_type === 'internal') {
+    const sides = new Set((diff.evidence || []).map((item) => item.side))
+    if (sides.size === 1 && sides.has('A')) return 'a_internal'
+    if (sides.size === 1 && sides.has('H')) return 'h_internal'
+  }
+  if (diff.diff_scope === 'cross_report') return 'cross_report'
+  return 'cross_report'
+}
+
+function emptyDiffGroups(): Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>> {
+  return DIFF_TRIAGE_GROUPS.reduce((triageAcc, triage) => {
+    triageAcc[triage.key] = DIFF_SOURCE_GROUPS.reduce((scopeAcc, scope) => {
+      scopeAcc[scope.key] = []
+      return scopeAcc
+    }, {} as Record<DiffSourceScope, DiffItem[]>)
+    return triageAcc
+  }, {} as Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>>)
+}
+
+function groupDiffsByTriageAndScope(diffs: DiffItem[]): Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>> {
+  const groups = emptyDiffGroups()
+  diffs.forEach((diff) => {
+    groups[normalizedTriageScope(diff)][normalizedDiffScope(diff)].push(diff)
+  })
+  return groups
+}
 
 function summaryNumber(summary: Record<string, unknown>, key: string): number {
   return numericValue(summary[key]) ?? 0
-}
-
-function hasSummaryKey(summary: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(summary, key)
 }
 
 function formatDuration(seconds?: number | null): string {
@@ -520,12 +563,10 @@ function auditConclusion(job: JobDetail, diffs: DiffItem[]) {
   const auxiliary = summaryNumber(summary, 'aux_warning_count')
   const evidenceItems = diffs.filter((diff) => (diff.evidence || []).length > 0).length
   if (shouldRefreshJob(job)) {
-    const current = latestProgress(job)
-    const progressText = current?.percent !== null && current?.percent !== undefined ? ` · ${current.percent}%` : ''
     return {
       tone: 'running',
       title: '核查任务正在执行',
-      copy: `${current?.message || '后端正在解析报告、提取画像并生成证据链'}${progressText}`,
+      copy: runningProgressLabel(job),
       pill: '蓝色 · 进行中',
       evidenceItems,
       blocking,
@@ -557,7 +598,7 @@ function auditConclusion(job: JobDetail, diffs: DiffItem[]) {
   return {
     tone: 'clean',
     title: '未发现真实差异或核心提取预警',
-    copy: 'A/H 画像、披露覆盖和证据定位已生成，可继续查看画像或抽样复核证据。',
+    copy: 'A/H 画像和证据定位已生成，可继续查看画像或抽样复核证据。',
     pill: '绿色 · 已完成',
     evidenceItems,
     blocking,
@@ -565,24 +606,74 @@ function auditConclusion(job: JobDetail, diffs: DiffItem[]) {
   }
 }
 
-function filteredDiffs(diffs: DiffItem[], scope: DiffScope): DiffItem[] {
-  if (scope === 'all' || scope === 'coverage') return diffs
-  return diffs.filter((diff) => (diff.triage || 'real') === scope)
-}
-
 function shouldRefreshJob(job: JobDetail | null): boolean {
   return Boolean(job?.status && JOB_REFRESH_STATUSES.has(job.status))
 }
 
-function latestProgress(job: JobDetail): JobProgressPayload | null {
-  const progress = job.progress || []
-  return progress.length ? progress[progress.length - 1] : null
+function runningProgressFromSummary(summary?: Record<string, unknown>): JobProgressPayload | null {
+  if (!summary) return null
+  const stage = typeof summary.current_stage === 'string' ? summary.current_stage : null
+  const percent = numericValue(summary.current_percent)
+  const message = typeof summary.current_message === 'string' ? summary.current_message : null
+  const updatedAt = typeof summary.last_progress_at === 'string' ? summary.last_progress_at : null
+  if (!stage && percent === null && !message && !updatedAt) return null
+  return {
+    stage,
+    percent,
+    message,
+    updated_at: updatedAt,
+  }
 }
 
-function diffScopeCount(diffs: DiffItem[], scope: DiffScope, coverageCount: number): number {
-  if (scope === 'all') return diffs.length
-  if (scope === 'coverage') return coverageCount
-  return filteredDiffs(diffs, scope).length
+function stageLabel(stage?: string | null): string {
+  if (stage === 'parsing') return '解析报告'
+  if (stage === 'profiling') return '提取画像'
+  if (stage === 'checking') return '差异核查'
+  if (stage === 'reporting') return '生成报告'
+  if (stage === 'failed') return '任务中断'
+  return '排队等待'
+}
+
+function runningProgressLabel(job: JobDetail): string {
+  const progress = latestProgress(job)
+  if (!progress) return statusLabel(job.status)
+  const label = progress.message || stageLabel(progress.stage)
+  const percent = progress.percent !== null && progress.percent !== undefined ? ` ${progress.percent}%` : ''
+  return `${label}${percent}`
+}
+
+function historyProgressLabel(item: JobSummary): string {
+  if (!JOB_REFRESH_STATUSES.has(item.status)) return ''
+  const progress = runningProgressFromSummary(item.comparison_summary)
+  if (!progress) return statusLabel(item.status)
+  const label = progress.message || stageLabel(progress.stage)
+  const percent = progress.percent !== null && progress.percent !== undefined ? ` ${progress.percent}%` : ''
+  return `${label}${percent}`
+}
+
+function visualOcrStatusLabel(summary?: Record<string, unknown>): string {
+  const status = summary?.visual_ocr_status
+  if (!status || typeof status !== 'object') return ''
+  const payload = status as Record<string, unknown>
+  const mode = typeof payload.mode === 'string' ? payload.mode : ''
+  const skippedReason = typeof payload.skipped_reason === 'string' ? payload.skipped_reason : ''
+  const sides = payload.sides && typeof payload.sides === 'object' ? payload.sides as Record<string, unknown> : {}
+  const ocrPageCount = Object.values(sides).reduce<number>((total, side) => {
+    if (!side || typeof side !== 'object') return total
+    const value = numericValue((side as Record<string, unknown>).ocr_page_count)
+    return total + (value || 0)
+  }, 0)
+  if (skippedReason === 'runtime_ocr_disabled') return 'OCR 标准核查：未运行高成本视觉 OCR'
+  if (skippedReason === 'easyocr_large_pdf') return 'OCR 已跳过：大文件仅 EasyOCR，优先完成任务'
+  if (payload.timed_out) return `OCR 预算已用尽：已处理 ${ocrPageCount} 页`
+  if (ocrPageCount) return `OCR ${mode || 'smart'}：已处理 ${ocrPageCount} 页`
+  if (mode === 'off') return 'OCR 标准核查：未运行高成本视觉 OCR'
+  return ''
+}
+
+function latestProgress(job: JobDetail): JobProgressPayload | null {
+  const progress = job.progress || []
+  return progress.length ? progress[progress.length - 1] : runningProgressFromSummary(job.comparison_summary)
 }
 
 function metricDisplayName(metric: ProfileMetricPreview): string {
@@ -771,6 +862,7 @@ function App() {
     form.append('company_name', upload.companyName.trim())
     form.append('check_mode', upload.checkMode)
     form.append('bilingual_level', upload.bilingualLevel)
+    form.append('visual_review_mode', upload.visualReviewMode)
     form.append('a_file', upload.aFile)
     form.append('h_file', upload.hFile)
     try {
@@ -1146,6 +1238,37 @@ function CockpitPage({
               <small>扩展规则覆盖，适合出具前复核</small>
             </button>
           </div>
+          <div className="field-label">视觉复核</div>
+          <div className="visual-review-control" role="group" aria-label="视觉复核模式">
+            <button
+              type="button"
+              className={`visual-review-option ${upload.visualReviewMode === 'off' ? 'selected' : ''}`}
+              aria-pressed={upload.visualReviewMode === 'off'}
+              onClick={() => setUpload((current) => ({ ...current, visualReviewMode: 'off' }))}
+            >
+              <strong>标准核查</strong>
+              <small>默认保证完成 · 不运行高成本 OCR</small>
+            </button>
+            <button
+              type="button"
+              className={`visual-review-option ${upload.visualReviewMode === 'smart' ? 'selected' : ''}`}
+              aria-pressed={upload.visualReviewMode === 'smart'}
+              onClick={() => setUpload((current) => ({ ...current, visualReviewMode: 'smart' }))}
+            >
+              <strong>智能视觉抽样</strong>
+              <small>Smart visual review · 小预算覆盖高风险页</small>
+            </button>
+            <button
+              type="button"
+              className={`visual-review-option ${upload.visualReviewMode === 'strict' ? 'selected' : ''}`}
+              aria-pressed={upload.visualReviewMode === 'strict'}
+              onClick={() => setUpload((current) => ({ ...current, visualReviewMode: 'strict' }))}
+            >
+              <strong>严格视觉核查</strong>
+              <small>Strict visual review · 扩大抽样范围，耗时会增加</small>
+            </button>
+          </div>
+          <p className="visual-review-note">默认保证完成：先抽取全量文本层/表格层数值；智能/严格模式再按预算执行视觉 OCR。</p>
           <div className="file-row">
             <label className={`file-card ${invalidClass('aFile')}`}>
               <span className="file-kicker">PDF</span>
@@ -1307,22 +1430,17 @@ function JobDetailPage({
   job: JobDetail | null
   setActiveDiff: (diff: DiffItem) => void
 }) {
-  const [diffScope, setDiffScope] = useState<DiffScope>('all')
+  const [selectedTriage, setSelectedTriage] = useState<DiffTriageScope>('real')
+  const [selectedSource, setSelectedSource] = useState<DiffSourceScope>('cross_report')
   if (!job) return <EmptyState label="正在加载核查详情" />
   const summary = job.comparison_summary || {}
   const diffs = job.diffs || []
   const labels = sideLabelsForJob(job)
   const conclusion = auditConclusion(job, diffs)
-  const coverageCount = summaryNumber(summary, 'coverage_count') || job.coverage_items?.length || 0
-  const visibleDiffs = filteredDiffs(diffs, diffScope)
-  const coverageItems = (job.coverage_items || []) as Array<Record<string, unknown>>
-  const diffScopes: Array<{ key: DiffScope; label: string }> = [
-    { key: 'all', label: '全部' },
-    { key: 'real', label: '真实差异' },
-    { key: 'unresolved', label: '待人工复核' },
-    { key: 'expected', label: '预期差异' },
-    { key: 'coverage', label: '披露覆盖' },
-  ]
+  const diffGroups = groupDiffsByTriageAndScope(diffs)
+  const selectedTriageGroup = DIFF_TRIAGE_GROUPS.find((item) => item.key === selectedTriage) || DIFF_TRIAGE_GROUPS[0]
+  const selectedSourceGroup = DIFF_SOURCE_GROUPS.find((item) => item.key === selectedSource) || DIFF_SOURCE_GROUPS[0]
+  const activeDiffs = diffGroups[selectedTriage][selectedSource]
   return (
     <section className="stack detail-dashboard">
       <div className={`audit-conclusion-strip ${conclusion.tone}`}>
@@ -1341,7 +1459,6 @@ function JobDetailPage({
           <div className="audit-conclusion-chips">
             <span>{labels.a}事实 <strong>{metric(summary, 'a_fact_count')}</strong></span>
             <span>{labels.h}事实 <strong>{metric(summary, 'h_fact_count')}</strong></span>
-            <span>披露覆盖 <strong>{valueText(coverageCount)}</strong></span>
             <span>跨页事件 <strong>{metric(summary, 'matched_event_count')}</strong></span>
             <span>核心预警 <strong>{valueText(conclusion.blocking)}</strong></span>
             <span>辅助提示 <strong>{valueText(conclusion.auxiliary)}</strong></span>
@@ -1351,6 +1468,8 @@ function JobDetailPage({
         <div className="audit-conclusion-side">
           <span className={`audit-pill ${conclusion.tone}`}>{conclusion.pill}</span>
           <span className={statusClass(job.status)}>{statusLabel(job.status)}</span>
+          {shouldRefreshJob(job) ? <small>{runningProgressLabel(job)}</small> : null}
+          {visualOcrStatusLabel(summary) ? <small>{visualOcrStatusLabel(summary)}</small> : null}
         </div>
       </div>
 
@@ -1359,25 +1478,19 @@ function JobDetailPage({
           tone="accent"
           label={labels.factLabel}
           value={`${metric(summary, 'a_fact_count')} / ${metric(summary, 'h_fact_count')}`}
-          note={`${labels.a}/${labels.h} · Key ${metric(summary, 'a_metric_keys')} / ${metric(summary, 'h_metric_keys')}`}
+          note={`${labels.a}/${labels.h} · 全量指标 ${metric(summary, 'a_metric_keys')} / ${metric(summary, 'h_metric_keys')}`}
         />
         <DashboardMetric
           tone={summaryNumber(summary, 'real_diff_count') ? 'critical' : undefined}
           label="差异"
           value={`${metric(summary, 'real_diff_count')} / ${metric(summary, 'expected_diff_count')}`}
-          note={`真实 / 预期 · 内部 ${metric(summary, 'internal_inconsistency_count')}`}
+          note={`真实 / 预期 · 内部指标 ${metric(summary, 'internal_inconsistency_count')} · 事件自身 ${metric(summary, 'internal_event_diff_count')}`}
         />
         <DashboardMetric
           tone={summaryNumber(summary, 'unresolved_diff_count') ? 'warning' : undefined}
           label="待人工复核"
           value={metric(summary, 'unresolved_diff_count')}
           note="未决差异 · 需人工判定"
-        />
-        <DashboardMetric
-          tone="accent"
-          label="披露覆盖"
-          value={valueText(coverageCount)}
-          note={`跨页 ${metric(summary, 'matched_event_count')} · 单边 ${labels.a} ${metric(summary, 'a_only_count')} / ${labels.h} ${metric(summary, 'h_only_count')}`}
         />
         <DashboardMetric
           tone={summaryNumber(summary, 'blocking_warning_count') ? 'warning' : undefined}
@@ -1393,10 +1506,6 @@ function JobDetailPage({
         />
       </div>
 
-      {job.check_mode !== 'h_bilingual' && (
-        <BranchDiagnosticsPanel summary={summary} labels={labels} />
-      )}
-
       {job.check_mode !== 'h_bilingual' ? (
         <div className="profile-showcase">
           <ProfileCard title="A 股画像" sideLabel={labels.a} profile={job.profile_a} />
@@ -1406,7 +1515,6 @@ function JobDetailPage({
         <BilingualPageReview
           job={job}
           diffs={diffs}
-          coverageCount={coverageCount}
           labels={labels}
           setActiveDiff={setActiveDiff}
         />
@@ -1417,147 +1525,70 @@ function JobDetailPage({
           <div>
             <p className="eyebrow">复核队列</p>
             <h2>差异与证据</h2>
-            <p className="panel-copy">按分流、严重性、主题、页码和规则 ID 展示，点击单项进入全屏证据审阅。</p>
+            <p className="panel-copy">先选择分流和来源，只展开当前需要复核的一组差异；点击单项进入全屏证据审阅。</p>
           </div>
-          <span className="mode-chip">{diffScope === 'coverage' ? coverageCount : visibleDiffs.length} 项</span>
+          <span className="mode-chip">{diffs.length} 项</span>
         </div>
-        <div className="diff-scope-rail" aria-label="差异分流筛选">
-          {diffScopes.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={diffScope === item.key ? 'selected' : ''}
-              onClick={() => setDiffScope(item.key)}
-            >
-              {item.label} <span>{diffScopeCount(diffs, item.key, coverageCount)}</span>
-            </button>
-          ))}
-        </div>
-        {diffScope === 'coverage' ? (
-          <div className="coverage-review-list">
-            {coverageItems.length ? coverageItems.slice(0, 10).map((item, index) => (
-              <article className="coverage-review-row" key={String(item.coverage_id || index)}>
-                <span>{index + 1}</span>
-                <strong>{valueText(item.category)} · {valueText(item.status)}</strong>
-                <p>{valueText(item.topic || item.title || item.note || item.coverage_id)}</p>
-                <small>A {valueText(item.a_pages)} / H {valueText(item.h_pages)}</small>
-              </article>
-            )) : <EmptyState label="暂无披露覆盖项" />}
+        {diffs.length ? (
+        <div className="diff-drilldown-board">
+          <div className="diff-drilldown-grid" aria-label="差异分类选择">
+            {DIFF_TRIAGE_GROUPS.map((triageGroup) => (
+              DIFF_SOURCE_GROUPS.map((sourceGroup) => {
+                const count = diffGroups[triageGroup.key][sourceGroup.key].length
+                const selected = selectedTriage === triageGroup.key && selectedSource === sourceGroup.key
+                return (
+                  <button
+                    key={`${triageGroup.key}-${sourceGroup.key}`}
+                    type="button"
+                    className={`diff-drilldown-card ${triageGroup.tone} ${selected ? 'selected' : ''}`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      setSelectedTriage(triageGroup.key)
+                      setSelectedSource(sourceGroup.key)
+                    }}
+                  >
+                    <span>{triageGroup.label}</span>
+                    <strong>{count}</strong>
+                    <small>{sourceGroup.label}</small>
+                  </button>
+                )
+              })
+            ))}
           </div>
-        ) : (
-          <div className="diff-command-table">
-            <div className="diff-command-head">
-              <span>#</span>
-              <span>分流</span>
-              <span>严重性</span>
-              <span>类型</span>
-              <span>差异说明</span>
-              <span>主题</span>
-              <span>{labels.a}取值</span>
-              <span>{labels.h}取值</span>
-              <span>页码</span>
-              <span>审阅</span>
+
+          <div className="diff-active-queue">
+            <div className="diff-active-head">
+              <div>
+                <p className="eyebrow">Selected Review Queue</p>
+                <h3>{selectedTriageGroup.label} · {selectedSourceGroup.label}</h3>
+                <p>{selectedSourceGroup.description}</p>
+              </div>
+              <span className={`triage ${triageClass(selectedTriage)}`}>{activeDiffs.length} 项</span>
             </div>
-            {visibleDiffs.length ? visibleDiffs.map((diff, index) => {
-              const values = reviewValues(diff)
-              return (
-                <article className="diff-command-row" key={diff.diff_id}>
-                  <span className="row-index">{index + 1}</span>
-                  <span className={`triage ${triageClass(diff.triage)}`}>{triageLabel(diff.triage)}</span>
-                  <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
-                  <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
-                  <div className="diff-command-copy">
-                    <strong>{diff.diff_explanation?.headline || localized(diff.topic)}</strong>
-                    <p>{diff.diff_explanation?.issue || localized(diff.summary)}</p>
-                    <small>规则 ID {diff.rule_id || '—'} · 证据 {diff.evidence?.length || 0} 条</small>
-                  </div>
-                  <strong className="diff-command-topic">{localized(diff.topic)}</strong>
-                  <span className="diff-command-value">{valueText(values.aValue)}</span>
-                  <span className="diff-command-value">{valueText(values.hValue)}</span>
-                  <span className="diff-command-pages">{evidencePages(diff)}</span>
-                  <button type="button" className="ghost" onClick={() => setActiveDiff(diff)}>查看证据</button>
-                </article>
-              )
-            }) : <EmptyState label="暂无差异" />}
+            <div className="diff-active-list">
+              {activeDiffs.length ? activeDiffs.map((diff) => {
+                const values = reviewValues(diff)
+                return (
+                  <article className="diff-source-row" key={diff.diff_id}>
+                    <div className="diff-source-row-main">
+                      <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
+                      <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
+                      <strong>{diff.diff_explanation?.headline || localized(diff.topic)}</strong>
+                      <p>{diff.diff_explanation?.issue || localized(diff.summary)}</p>
+                      <small>规则 ID {diff.rule_id || '—'} · {evidencePages(diff)}</small>
+                    </div>
+                    <div className="diff-source-row-meta">
+                      <span>{valueText(values.aValue)}</span>
+                      <span>{valueText(values.hValue)}</span>
+                      <button type="button" className="ghost" onClick={() => setActiveDiff(diff)}>查看证据</button>
+                    </div>
+                  </article>
+                )
+              }) : <div className="diff-source-empty">暂无此类差异</div>}
+            </div>
           </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-function BranchDiagnosticsPanel({
-  summary,
-  labels,
-}: {
-  summary: Record<string, unknown>
-  labels: { a: string; h: string; factLabel: string }
-}) {
-  const sourceRecorded = hasSummaryKey(summary, 'branch_source_doc_available')
-  const sourceAvailable = summary.branch_source_doc_available === true
-  const aBranchCount = summaryNumber(summary, 'a_branch_count')
-  const hBranchCount = summaryNumber(summary, 'h_branch_count')
-  const matchedBranchCount = summaryNumber(summary, 'matched_branch_count')
-  const branchDiffCount = summaryNumber(summary, 'branch_diff_count')
-  const branchAlignmentRatio = summaryNumber(summary, 'branch_alignment_ratio')
-  const hasDiagnostics = [
-    'branch_source_doc_available',
-    'a_branch_count',
-    'h_branch_count',
-    'matched_branch_count',
-    'branch_diff_count',
-    'branch_alignment_ratio',
-  ].some((key) => hasSummaryKey(summary, key))
-
-  let note = '当前结果未包含分支机构诊断字段，建议用最新引擎重新生成任务。'
-  if (hasDiagnostics) {
-    if (sourceRecorded && !sourceAvailable) {
-      note = '分支机构源文档未进入披露检查，系统未输出分支机构真实差异。'
-    } else if (!aBranchCount || !hBranchCount) {
-      note = '未稳定提取到两侧分支机构表，系统保守跳过分支机构真实差异。'
-    } else if (!matchedBranchCount) {
-      note = '未匹配到同名分支机构，系统保守跳过分支机构真实差异。'
-    } else if (branchAlignmentRatio && branchAlignmentRatio < 0.8) {
-      note = `分支机构匹配比例 ${formatRatio(summaryNumber(summary, 'branch_alignment_ratio'))}，低于真实差异输出门槛。`
-    } else if (branchDiffCount) {
-      note = `已稳定匹配 ${matchedBranchCount} 家分支机构，输出 ${branchDiffCount} 条分支机构资产规模真实差异。`
-    } else {
-      note = `已稳定匹配 ${matchedBranchCount} 家分支机构，未发现资产规模真实差异。`
-    }
-  }
-
-  return (
-    <section className={`branch-diagnostics-panel ${branchDiffCount ? 'has-diff' : ''}`}>
-      <div className="branch-diagnostics-copy">
-        <p className="eyebrow">Branch Disclosure Diagnostics</p>
-        <h3>分支机构披露检查</h3>
-        <p className="branch-diagnostics-note">{note}</p>
-      </div>
-      <div className="branch-diagnostics-grid" aria-label="分支机构披露诊断">
-        <div className="branch-diagnostics-card">
-          <span>源文档</span>
-          <strong>{sourceRecorded ? (sourceAvailable ? '已接入' : '缺失') : '未记录'}</strong>
         </div>
-        <div className="branch-diagnostics-card">
-          <span>{labels.a} 分支</span>
-          <strong>{valueText(aBranchCount)}</strong>
-        </div>
-        <div className="branch-diagnostics-card">
-          <span>{labels.h} 分支</span>
-          <strong>{valueText(hBranchCount)}</strong>
-        </div>
-        <div className="branch-diagnostics-card">
-          <span>稳定匹配</span>
-          <strong>{valueText(matchedBranchCount)}</strong>
-        </div>
-        <div className="branch-diagnostics-card">
-          <span>对齐率</span>
-          <strong>{formatRatio(summaryNumber(summary, 'branch_alignment_ratio'))}</strong>
-        </div>
-        <div className="branch-diagnostics-card emphasis">
-          <span>分支真实差异</span>
-          <strong>{valueText(branchDiffCount)}</strong>
-        </div>
+        ) : <EmptyState label="暂无差异" />}
       </div>
     </section>
   )
@@ -1566,13 +1597,11 @@ function BranchDiagnosticsPanel({
 function BilingualPageReview({
   job,
   diffs,
-  coverageCount,
   labels,
   setActiveDiff,
 }: {
   job: JobDetail
   diffs: DiffItem[]
-  coverageCount: number
   labels: { a: string; h: string; factLabel: string }
   setActiveDiff: (diff: DiffItem) => void
 }) {
@@ -1587,13 +1616,12 @@ function BilingualPageReview({
           <h2>H 股中英文逐页核对</h2>
           <p>按 H 中文报告与 H 英文报告逐页定位差异和证据，突出文本、事实、披露项逐项复核链路。</p>
         </div>
-        <span className="mode-chip">{reviewRows.length || coverageCount} 项</span>
+        <span className="mode-chip">{reviewRows.length} 项</span>
       </div>
 
       <div className="bilingual-review-stats">
         <span><small>{labels.a}事实数</small><strong>{metric(summary, 'a_fact_count')}</strong></span>
         <span><small>{labels.h}事实数</small><strong>{metric(summary, 'h_fact_count')}</strong></span>
-        <span><small>披露/文本覆盖项</small><strong>{valueText(coverageCount)}</strong></span>
         <span><small>真实差异</small><strong>{metric(summary, 'real_diff_count')}</strong></span>
         <span><small>待复核</small><strong>{metric(summary, 'unresolved_diff_count')}</strong></span>
         <span><small>证据定位数</small><strong>{valueText(evidenceLocated)}</strong></span>
@@ -1667,7 +1695,7 @@ function ProfileCard({ title, sideLabel, profile }: { title: string; sideLabel: 
       <div className="profile-stat-grid">
         <span><small>总页数</small><strong>{valueText(profile?.total_pages)}</strong></span>
         <span><small>扫描页数</small><strong>{profileScanText(profile)}</strong></span>
-        <span><small>指标 Key</small><strong>{valueText(profile?.metric_keys)}</strong></span>
+        <span><small>全量指标</small><strong>{valueText(profile?.metric_keys)}</strong></span>
         <span><small>事实出现</small><strong>{valueText(profile?.metric_occurrences)}</strong></span>
         <span><small>叙述块</small><strong>{valueText(profile?.narrative_blocks)}</strong></span>
         <span><small>结构节点</small><strong>{valueText(profile?.structure_nodes)}</strong></span>
@@ -1794,10 +1822,12 @@ function ProfilePage({
 function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) {
   const summary = item.comparison_summary || {}
   if (table) {
+    const detailLabel = historyProgressLabel(item) || visualOcrStatusLabel(summary)
     return (
       <a className="history-row" href={`#/jobs/${item.job_id}`}>
         <span>
           <strong>{item.company_name || item.job_id}</strong>
+          {detailLabel ? <small>{detailLabel}</small> : null}
         </span>
         <span>{modeLabel(item.check_mode)}</span>
         <span>{item.owner_display_name || 'Chu, Stanley'}</span>
@@ -1812,7 +1842,7 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
     <a className="job-row" href={`#/jobs/${item.job_id}`}>
       <span>
         <strong>{item.company_name || item.job_id}</strong>
-        <small>{item.owner_display_name || 'Chu, Stanley'} · {formatDate(item.started_at)}</small>
+        <small>{historyProgressLabel(item) || visualOcrStatusLabel(summary) || `${item.owner_display_name || 'Chu, Stanley'} · ${formatDate(item.started_at)}`}</small>
       </span>
       <span className="job-row-mode">
         <small>核查模式</small>

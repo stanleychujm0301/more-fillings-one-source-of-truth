@@ -12,15 +12,27 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from loguru import logger
 
-from ahcc.check.branch_disclosure import branch_table_diagnostics, compare_branch_tables
+from ahcc.check.branch_disclosure import (
+    branch_table_diagnostics,
+    compare_branch_tables,
+    load_branch_lightweight_doc,
+)
 from ahcc.config import settings
 from ahcc.orchestrator import Orchestrator
-from ahcc.parser import parse_report
 from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION
 from ahcc.report.excel import export_excel
 from ahcc.report.pdf import export_pdf
-from ahcc.schemas import Diff, Job, JobStatus, Language, ReportDocument, ReportSide, TextSegment
-from ahcc.storage.repository import apply_current_user_context, get_diffs, get_job, list_jobs, save_job
+from ahcc.schemas import Diff, Job, JobStatus, ReportSide
+from ahcc.storage.repository import (
+    _CURRENT_RESULT_VERSION,
+    apply_current_user_context,
+    get_diffs,
+    get_job,
+    list_jobs,
+    running_progress_summary,
+    save_job,
+    save_job_progress,
+)
 
 router = APIRouter()
 
@@ -42,6 +54,7 @@ async def create_job(
     company_name: str = Form(...),
     check_mode: str = Form("ah"),
     bilingual_level: str = Form("fast"),
+    visual_review_mode: str = Form("off"),
     a_file: UploadFile = File(...),
     h_file: UploadFile = File(...),
 ) -> Job:
@@ -55,6 +68,9 @@ async def create_job(
     normalized_bilingual_level = (bilingual_level or "fast").strip().lower()
     if normalized_bilingual_level not in {"fast", "strict"}:
         raise HTTPException(status_code=422, detail="bilingual_level must be fast or strict")
+    normalized_visual_review_mode = (visual_review_mode or "off").strip().lower()
+    if normalized_visual_review_mode not in {"off", "smart", "strict"}:
+        raise HTTPException(status_code=422, detail="visual_review_mode must be off, smart or strict")
 
     upload_dir = settings.storage_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -82,33 +98,86 @@ async def create_job(
         )
     )
     save_job(job)
-    asyncio.create_task(_run_job_background(job, bilingual_level=normalized_bilingual_level))
+    from ahcc.api.job_runner import run_job  # 延迟导入避免循环
+
+    asyncio.create_task(
+        run_job(
+            job,
+            bilingual_level=normalized_bilingual_level,
+            visual_review_mode=normalized_visual_review_mode,
+        )
+    )
     return job
 
 
-async def _run_job_background(job: Job, *, bilingual_level: str = "fast") -> None:
+async def _run_job_background(
+    job: Job,
+    *,
+    bilingual_level: str = "fast",
+    visual_review_mode: str = "off",
+) -> None:
+    def _persist_progress(updated_job: Job) -> None:
+        save_job_progress(apply_current_user_context(updated_job))
+
     try:
-        completed = await Orchestrator().run(
-            job.a_file,
-            job.h_file,
-            job.company_name,
-            job.check_mode,
-            bilingual_level=bilingual_level,
-            job=job,
+        completed = await asyncio.wait_for(
+            Orchestrator().run(
+                job.a_file,
+                job.h_file,
+                job.company_name,
+                job.check_mode,
+                bilingual_level=bilingual_level,
+                visual_review_mode=visual_review_mode,
+                job=job,
+                progress_callback=_persist_progress,
+            ),
+            timeout=settings.job_timeout_seconds,
         )
         save_job(apply_current_user_context(completed))
+    except asyncio.TimeoutError:
+        message = (
+            f"job timeout: exceeded {int(settings.job_timeout_seconds)} seconds; "
+            "please rerun the task with smaller files or a faster review mode."
+        )
+        logger.exception(f"[{job.job_id}] background job timed out")
+        save_job(apply_current_user_context(_failed_background_job(job, message)))
+    except asyncio.CancelledError:
+        message = "background job interrupted: service stopped before the task completed; please rerun the task."
+        logger.warning(f"[{job.job_id}] background job cancelled")
+        save_job(apply_current_user_context(_failed_background_job(job, message)))
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"[{job.job_id}] background job failed")
-        finished_at = datetime.utcnow()
-        failed = job.model_copy(
-            update={
-                "status": JobStatus.FAILED,
-                "finished_at": finished_at,
-                "duration_seconds": (finished_at - job.started_at).total_seconds(),
-                "error": str(exc),
+        save_job(apply_current_user_context(_failed_background_job(job, str(exc))))
+
+
+def _failed_background_job(job: Job, message: str) -> Job:
+    finished_at = datetime.utcnow()
+    summary = dict(job.comparison_summary or {})
+    if summary.get("current_stage"):
+        summary.update(
+            {
+                "failure_stage": JobStatus.FAILED.value,
+                "failure_message": message,
+                "failed_at": finished_at.isoformat(),
             }
         )
-        save_job(apply_current_user_context(failed))
+    else:
+        summary = running_progress_summary(
+            summary,
+            JobStatus.FAILED,
+            0,
+            message,
+            now=finished_at,
+        )
+    return job.model_copy(
+        update={
+            "status": JobStatus.FAILED,
+            "finished_at": finished_at,
+            "duration_seconds": (finished_at - job.started_at).total_seconds(),
+            "error": message,
+            "comparison_summary": summary,
+        }
+    )
 
 
 @router.get("/{job_id}/diffs", response_model=list[Diff])
@@ -188,6 +257,10 @@ def _remove_temp_report(path: Path) -> None:
         logger.warning(f"Unable to remove temporary report file: {path}")
 
 
+# 模块级别名，保留为可 monkeypatch 的钩子（测试用假文档替身，避免真实解析 PDF）。
+_load_branch_repair_doc = load_branch_lightweight_doc
+
+
 def _repair_branch_diffs_if_needed(job_id: str) -> bool:
     job_meta = get_job(job_id)
     if not job_meta:
@@ -213,6 +286,7 @@ def _repair_branch_diffs_if_needed(job_id: str) -> bool:
     if not branch_diffs:
         return False
 
+    branch_diffs = [diff.model_copy(update={"triage": "real"}) for diff in branch_diffs]
     existing_ids = {diff.diff_id for diff in diffs}
     merged_diffs = [
         *diffs,
@@ -231,38 +305,6 @@ def _repair_branch_diffs_if_needed(job_id: str) -> bool:
     save_job(Job.model_validate(payload))
     logger.info(f"[{job_id}] repaired branch disclosure diffs: +{len(branch_diffs)}")
     return True
-
-
-def _load_branch_repair_doc(file_path: str, side: ReportSide) -> ReportDocument:
-    """Load only page text for fast branch-disclosure repair; fall back to full parser."""
-    try:
-        import fitz
-    except ImportError:
-        return parse_report(file_path, side)
-
-    pdf = fitz.open(file_path)
-    texts: list[TextSegment] = []
-    for page_number, page in enumerate(pdf, start=1):
-        text = page.get_text("text")
-        if not text:
-            continue
-        texts.append(
-            TextSegment(
-                segment_id=f"{side.value}-branch-repair-{page_number}",
-                page=page_number,
-                bbox=(0, 0, 1, 1),
-                text=text,
-                language=Language.ZH,
-            )
-        )
-    return ReportDocument(
-        doc_id=f"{side.value}-branch-repair",
-        side=side,
-        file_path=file_path,
-        total_pages=pdf.page_count,
-        primary_language=Language.ZH,
-        texts=texts,
-    )
 
 
 def _branch_repair_needed(job_meta: dict, summary: dict, diffs: list[Diff]) -> bool:
@@ -289,7 +331,7 @@ def _summary_with_repaired_branch_diffs(
 ) -> dict:
     repaired = dict(summary)
     repaired.update(branch_table_diagnostics(doc_a, doc_h, diffs))
-    repaired["result_version"] = int(summary.get("result_version") or 11)
+    repaired["result_version"] = _CURRENT_RESULT_VERSION
     repaired["parser_version"] = PARSER_VERSION
     repaired["extraction_engine_version"] = EXTRACTION_ENGINE_VERSION
     repaired["current_extraction_engine_version"] = EXTRACTION_ENGINE_VERSION

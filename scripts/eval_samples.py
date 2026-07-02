@@ -7,13 +7,19 @@
 批量模式（评估 3 组样本并汇总基线，写入 storage/eval/eval_baseline.md）：
     python scripts/eval_samples.py --samples-dir samples/ --out storage/eval
 
-samples-dir 约定：每个子目录为一个样本对，包含 A 股 PDF + H 股 PDF + answer.xlsx，
-子目录名即 pair_id。PDF 文件名建议含 A/H 区分字符（如 sample1_A.pdf / sample1_H.pdf）。
+samples-dir 支持两种布局：
+1. 子目录式：每个子目录为一个样本对（A 股 PDF + H 股 PDF + answer.xlsx），子目录名即 pair_id；
+2. 平铺式（主办方 sample/ 目录原样）：目录下直接放
+   {公司}A股年报_含错误_测试版.pdf + {公司}A股年报_错误清单_15处.xlsx + {公司}_20XX年H股年报.pdf，
+   按公司名前缀自动配对。
+
+--overlay-only 快速模式：跳过全 pipeline，仅跑文本层叠加篡改检测（秒级），用于日常回归。
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,7 +36,14 @@ from ahcc.orchestrator import Orchestrator
 app = typer.Typer(add_completion=False)
 
 
-def _run_pair(a_path: Path, h_path: Path):
+def _run_pair(a_path: Path, h_path: Path, *, overlay_only: bool = False):
+    if overlay_only:
+        from types import SimpleNamespace
+
+        from ahcc.check.text_overlay_tamper import run_text_overlay_checks
+
+        diffs = run_text_overlay_checks(str(a_path), str(h_path))
+        return SimpleNamespace(diffs=diffs)
     return asyncio.run(Orchestrator().run(str(a_path), str(h_path)))
 
 
@@ -52,11 +65,45 @@ def _find_answer(directory: Path) -> Optional[Path]:
     return xlsx[0] if xlsx else None
 
 
-def _eval_one(pair_id: str, a_path: Path, h_path: Path, answers_path: Optional[Path], out_dir: Path) -> Optional[EvalReport]:
+def _flat_sample_pairs(directory: Path) -> list[tuple[str, Path, Path, Path]]:
+    """平铺目录配对：按 `{公司}A股年报_错误清单_*.xlsx` 锚定公司名，找同名含错误 A 股 PDF 与 H 股 PDF。
+
+    返回 [(company, a_pdf, h_pdf, answers_xlsx), ...]
+    """
+    pairs: list[tuple[str, Path, Path, Path]] = []
+    pdfs = sorted(directory.glob("*.pdf"))
+    for xlsx in sorted(directory.glob("*错误清单*.xlsx")):
+        company = re.sub(r"(20\d{2}\s*年?)?A股年报.*$", "", xlsx.stem).strip("_ ")
+        if not company:
+            continue
+        a_pdf = next(
+            (p for p in pdfs if p.name.startswith(company) and "含错误" in p.name),
+            None,
+        )
+        h_pdf = next(
+            (p for p in pdfs if p.name.startswith(company) and "H股" in p.name.upper()),
+            None,
+        )
+        if not a_pdf or not h_pdf:
+            print(f"[跳过] {company}：A={'有' if a_pdf else '无'} H={'有' if h_pdf else '无'}")
+            continue
+        pairs.append((company, a_pdf, h_pdf, xlsx))
+    return pairs
+
+
+def _eval_one(
+    pair_id: str,
+    a_path: Path,
+    h_path: Path,
+    answers_path: Optional[Path],
+    out_dir: Path,
+    *,
+    overlay_only: bool = False,
+) -> Optional[EvalReport]:
     print(f"\n=== {pair_id} ===")
     start = time.time()
     try:
-        job = _run_pair(a_path, h_path)
+        job = _run_pair(a_path, h_path, overlay_only=overlay_only)
     except Exception as exc:  # noqa: BLE001
         print(f"  [失败] 任务执行异常：{exc}")
         return None
@@ -116,29 +163,43 @@ def _write_baseline(reports: list[EvalReport], out_dir: Path) -> None:
 def main(
     pair: str = typer.Option(None, help="单对模式：A,H 文件路径，逗号分隔"),
     answers: Path = typer.Option(None, help="单对模式：预期答案 Excel"),
-    samples_dir: Path = typer.Option(None, help="批量模式：样本根目录，子目录各含 A/H PDF + answer.xlsx"),
+    samples_dir: Path = typer.Option(None, help="批量模式：样本根目录（子目录式或平铺式）"),
     out: Path = typer.Option(Path("storage/eval"), help="评估明细输出目录"),
+    overlay_only: bool = typer.Option(
+        False, "--overlay-only", help="快速模式：仅跑文本层叠加篡改检测（秒级，日常回归用）"
+    ),
 ) -> None:
     out.mkdir(parents=True, exist_ok=True)
     reports: list[EvalReport] = []
 
     if samples_dir:
-        for sub in sorted(p for p in samples_dir.iterdir() if p.is_dir()):
-            a = _find_pdf(sub, "a")
-            h = _find_pdf(sub, "h")
-            # 避免 H 文件被 a 关键词误匹配（如 'share'），二次确认 H 文件名含 h 但排除已选 A
-            if a and h and a.resolve() == h.resolve():
-                h = None
-            ans = _find_answer(sub)
-            if not a or not h:
-                print(f"[跳过] {sub.name} 缺少 A/H PDF（A={'有' if a else '无'} H={'有' if h else '无'}）")
-                continue
-            r = _eval_one(sub.name, a, h, ans, out)
-            if r:
-                reports.append(r)
+        subdirs = sorted(p for p in samples_dir.iterdir() if p.is_dir())
+        flat_pairs = _flat_sample_pairs(samples_dir)
+        if flat_pairs:
+            # 平铺式（主办方 sample/ 目录原样）
+            for company, a, h, ans in flat_pairs:
+                r = _eval_one(company, a, h, ans, out, overlay_only=overlay_only)
+                if r:
+                    reports.append(r)
+        else:
+            for sub in subdirs:
+                a = _find_pdf(sub, "a")
+                h = _find_pdf(sub, "h")
+                # 避免 H 文件被 a 关键词误匹配（如 'share'），二次确认 H 文件名含 h 但排除已选 A
+                if a and h and a.resolve() == h.resolve():
+                    h = None
+                ans = _find_answer(sub)
+                if not a or not h:
+                    print(f"[跳过] {sub.name} 缺少 A/H PDF（A={'有' if a else '无'} H={'有' if h else '无'}）")
+                    continue
+                r = _eval_one(sub.name, a, h, ans, out, overlay_only=overlay_only)
+                if r:
+                    reports.append(r)
     elif pair:
         a_path, h_path = pair.split(",")
-        r = _eval_one("single", Path(a_path.strip()), Path(h_path.strip()), answers, out)
+        r = _eval_one(
+            "single", Path(a_path.strip()), Path(h_path.strip()), answers, out, overlay_only=overlay_only
+        )
         if r:
             reports.append(r)
     else:

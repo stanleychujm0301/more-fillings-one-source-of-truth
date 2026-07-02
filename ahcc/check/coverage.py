@@ -7,22 +7,26 @@ matched cross-page events visible without polluting the real-difference list.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Iterable
 
 from ahcc.align.glossary import to_simplified
+from ahcc.config import settings
 from ahcc.check.explanation import (
     explanation_item,
     format_explanation_value,
     format_location,
 )
+from ahcc.llm.client import cached_call
 from ahcc.profile.compare import compare_metrics, compare_narratives, compare_structures
 from ahcc.profile.topic_map import get_topic_for_text, get_topic_name
 from ahcc.schemas import (
     Diff,
     DiffExplanation,
+    DiffScope,
     DiffSeverity,
     DiffType,
     DisclosureCoverageItem,
@@ -488,16 +492,25 @@ def run_event_checks_on_profiles(profile_a, profile_h) -> tuple[list[DisclosureC
                 continue
             matched_h.add(best_idx)
             strong_mismatches = _real_event_mismatches(a_event, h_event, best_score, mismatches)
-            is_real_event_diff = bool(strong_mismatches)
-            coverage.append(_event_coverage(a_event, h_event, best_score, mismatches, is_real_event_diff))
-            if is_real_event_diff:
+            if strong_mismatches:
+                llm_reason = _llm_event_downgrade_reason(a_event, h_event, best_score, strong_mismatches)
+                if llm_reason:
+                    coverage.append(_event_coverage(a_event, h_event, best_score, mismatches, False))
+                    diffs.append(_event_llm_review_diff(a_event, h_event, best_score, strong_mismatches, llm_reason))
+                    continue
+                coverage.append(_event_coverage(a_event, h_event, best_score, mismatches, True))
                 diffs.append(_event_diff(a_event, h_event, best_score, strong_mismatches))
+            else:
+                coverage.append(_event_coverage(a_event, h_event, best_score, mismatches, False))
         else:
             coverage.append(_event_coverage(a_event, None, 0.0, []))
 
     for idx, h_event in enumerate(h_events):
         if idx not in matched_h:
             coverage.append(_event_coverage(None, h_event, 0.0, []))
+
+    diffs.extend(_same_report_event_diffs(a_events, DiffScope.A_INTERNAL))
+    diffs.extend(_same_report_event_diffs(h_events, DiffScope.H_INTERNAL))
 
     return _dedupe_coverage(coverage), diffs
 
@@ -2083,6 +2096,191 @@ def _event_diff(
         evidence=[a_event.evidence, h_event.evidence],
         diff_explanation=explanation,
         rule_id="event_fact_match",
+    )
+
+
+def _event_llm_payload(event: EventCandidate) -> dict:
+    facts = event.facts
+    return {
+        "side": event.side.value,
+        "topic_key": event.topic_key,
+        "topic_label": event.topic_label,
+        "page": event.page,
+        "section": event.section,
+        "text": event.text[:900],
+        "dates": sorted(facts.dates),
+        "amount_roles": {role: sorted(values) for role, values in sorted(facts.amount_roles.items())},
+        "percentage_roles": {role: sorted(values) for role, values in sorted(facts.percentage_roles.items())},
+        "entities": sorted(facts.entities),
+        "statuses": sorted(facts.statuses),
+        "domains": sorted(facts.domains),
+        "action_terms": sorted(event.action_terms),
+        "identity_signature": list(event.event_identity_signature),
+    }
+
+
+def _llm_event_downgrade_reason(
+    a_event: EventCandidate,
+    h_event: EventCandidate,
+    confidence: float,
+    mismatches: list[str],
+) -> str | None:
+    if not getattr(settings, "event_use_llm_semantic_review", True):
+        return None
+    if not (settings.deepseek_api_key or "").strip():
+        return None
+
+    payload = {
+        "match_confidence": round(confidence, 4),
+        "mismatch_fields": mismatches,
+        "a": _event_llm_payload(a_event),
+        "h": _event_llm_payload(h_event),
+    }
+    prompt = (
+        "You are a financial reporting consistency reviewer. "
+        "A rule-based event checker is about to classify these A/H disclosures as a real factual mismatch. "
+        "First decide whether the two disclosures describe the same underlying event and reporting scope. "
+        "Use dates, counterparties, event names, issue numbers, periods, action terms, fact roles and the source text. "
+        "If they are merely similar topics, different periods, different issues, different counterparties, "
+        "or otherwise not the same concrete event, set comparable=false. "
+        "You may only downgrade or require review; do not invent a difference. "
+        "Return strict JSON: {\"comparable\":true|false,\"confidence\":0.0,\"reason\":\"short reason\",\"a_scope\":\"\",\"h_scope\":\"\"}.\n\n"
+        f"Candidate:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    result = cached_call(
+        "reason",
+        [{"role": "user", "content": prompt}],
+        json_mode=True,
+        temperature=0.0,
+        max_tokens=1024,
+    )
+    if isinstance(result, str) and result.strip():
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(result, dict):
+        return None
+    comparable = result.get("comparable")
+    try:
+        review_confidence = float(result.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        review_confidence = 0.0
+    threshold = getattr(settings, "event_llm_review_min_confidence", 0.80)
+    if comparable is False and review_confidence >= threshold:
+        return str(result.get("reason") or "LLM semantic review marked the event pair as non-comparable")[:240]
+    return None
+
+
+def _event_llm_review_diff(
+    a_event: EventCandidate,
+    h_event: EventCandidate,
+    confidence: float,
+    mismatches: list[str],
+    reason: str,
+) -> Diff:
+    topic = _event_topic(a_event, h_event)
+    mismatch_text = "、".join(mismatches)
+    return Diff(
+        diff_id=_coverage_id("event-llm-review", str(a_event.page), str(h_event.page), topic.best())[:12],
+        diff_type=DiffType.DISCLOSURE,
+        severity=DiffSeverity.INFO,
+        triage="unresolved",
+        canonical_key="event_fact_mismatch",
+        topic=topic,
+        summary=LocalizedString(
+            zh=f"DeepSeek 语义复核认为事件候选可能不是同一事项，暂不判定为真实差异：{topic.best()}（字段：{mismatch_text}；原因：{reason}）",
+            en=f"DeepSeek semantic review marked the event candidate as potentially non-comparable: {topic.best()} ({mismatch_text}; {reason})",
+        ),
+        evidence=[a_event.evidence, h_event.evidence],
+        diff_explanation=_event_explanation(a_event, h_event, confidence, mismatches),
+        rule_id="llm_semantic_review",
+    )
+
+
+def _same_report_event_diffs(events: list[EventCandidate], diff_scope: DiffScope) -> list[Diff]:
+    diffs: list[Diff] = []
+    seen: set[tuple[int, int, str]] = set()
+    for first_idx, first_event in enumerate(events):
+        for second_event in events[first_idx + 1:]:
+            if first_event.topic_key != second_event.topic_key:
+                continue
+            confidence = _event_score(first_event, second_event)
+            mismatches = _fact_mismatches(first_event, second_event)
+            strong_mismatches = _real_event_mismatches(first_event, second_event, confidence, mismatches)
+            if not strong_mismatches:
+                continue
+            if not _event_identity_compatible(first_event, second_event):
+                continue
+            key = (first_event.page, second_event.page, ",".join(strong_mismatches))
+            if key in seen:
+                continue
+            seen.add(key)
+            diffs.append(_internal_event_diff(first_event, second_event, confidence, strong_mismatches, diff_scope))
+            if len(diffs) >= 20:
+                return diffs
+    return diffs
+
+
+def _internal_event_diff(
+    first_event: EventCandidate,
+    second_event: EventCandidate,
+    confidence: float,
+    mismatches: list[str],
+    diff_scope: DiffScope,
+) -> Diff:
+    topic = _event_topic(first_event, second_event)
+    mismatch_text = "、".join(mismatches)
+    side_label = "A股报告" if diff_scope == DiffScope.A_INTERNAL else "H股报告"
+    return Diff(
+        diff_id=_coverage_id(
+            "internal-event-diff",
+            diff_scope.value,
+            str(first_event.page),
+            str(second_event.page),
+            topic.best(),
+        )[:12],
+        diff_type=DiffType.INTERNAL,
+        diff_scope=diff_scope,
+        severity=DiffSeverity.MEDIUM,
+        triage="real",
+        canonical_key="event_internal_fact_mismatch",
+        topic=topic,
+        summary=LocalizedString(
+            zh=f"{side_label}自身事件事实不一致：{topic.best()}（差异字段：{mismatch_text}，匹配置信度 {confidence:.2f}）",
+            en=f"{side_label} internal event fact mismatch: {topic.best()} ({mismatch_text}, confidence {confidence:.2f})",
+        ),
+        evidence=[first_event.evidence, second_event.evidence],
+        diff_explanation=_internal_event_explanation(first_event, second_event, confidence, mismatches, side_label),
+        rule_id="event_internal_fact_match",
+    )
+
+
+def _internal_event_explanation(
+    first_event: EventCandidate,
+    second_event: EventCandidate,
+    confidence: float,
+    mismatches: list[str],
+    side_label: str,
+) -> DiffExplanation:
+    topic = _event_topic(first_event, second_event)
+    items = _event_explanation_items(first_event, second_event, mismatches)
+    fields = "、".join(mismatches) if mismatches else "披露事实"
+    if items:
+        parts = [
+            f"第一处披露{item.label} {format_explanation_value(item.a_value)}；"
+            f"第二处披露{item.label} {format_explanation_value(item.h_value)}"
+            for item in items[:3]
+        ]
+        issue = "；".join(parts)
+    else:
+        issue = f"{side_label}内同一主题事件的{fields}披露不一致，匹配置信度 {confidence:.2f}。"
+    return DiffExplanation(
+        headline=f"{side_label}自身{topic.best()}{fields}不一致",
+        issue=issue,
+        location=f"{side_label} 第{first_event.page}/{second_event.page}页",
+        items=items,
+        review_hint=f"优先核对{side_label}内两处披露是否为同一事项、同一期间和同一事实口径。",
     )
 
 

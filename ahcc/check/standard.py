@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import re
 from typing import Iterable
 
 from loguru import logger
@@ -46,6 +47,7 @@ async def run_standard_checks(pairs: Iterable[AlignedPair]) -> list[Diff]:
         and p.h_point.value is not None
         # 用 isclose 比浮点，避免微小舍入差触发无谓的 LLM 推理
         and not math.isclose(p.a_point.value, p.h_point.value, rel_tol=1e-6, abs_tol=1e-9)
+        and _pair_reporting_scope_compatible(p)
     ]
     if not pairs_list:
         return []
@@ -179,6 +181,75 @@ def _delta_pct(pair: AlignedPair) -> float:
         base = max(abs(pair.a_point.value), abs(pair.h_point.value), 1e-9)
         return round(abs(pair.a_point.value - pair.h_point.value) / base * 100, 2)
     return 0.0
+
+
+def _point_scope_text(pair: AlignedPair, side: str) -> str:
+    point = pair.a_point if side == "a" else pair.h_point
+    if not point:
+        return ""
+    evidence = point.evidence
+    parts = [
+        point.name.zh,
+        point.name.en,
+        point.period,
+        point.value_text,
+        evidence.section if evidence else None,
+        evidence.snippet if evidence else None,
+    ]
+    return " ".join(str(part or "") for part in parts).lower()
+
+
+def _is_quarterly_scope_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "").lower()
+    markers = (
+        "本年度分季度",
+        "分季度经营指标",
+        "第一季度",
+        "一季度",
+        "第1季度",
+        "1季度",
+        "第二季度",
+        "二季度",
+        "第2季度",
+        "2季度",
+        "第三季度",
+        "三季度",
+        "第3季度",
+        "3季度",
+        "第四季度",
+        "四季度",
+        "第4季度",
+        "4季度",
+        "quarterly",
+        "firstquarter",
+        "secondquarter",
+        "thirdquarter",
+        "fourthquarter",
+    )
+    return any(marker in compact for marker in markers) or bool(re.search(r"\bq[1-4]\b|[1-4]q\b", text or ""))
+
+
+def _scope_bucket(text: str) -> str:
+    compact = re.sub(r"\s+", "", text or "").lower()
+    if _is_quarterly_scope_text(text):
+        return "quarterly"
+    if any(marker in compact for marker in ("分部", "业务分部", "经营分部", "segment")):
+        return "segment"
+    if any(marker in compact for marker in ("母公司", "本公司财务报表", "parentcompany", "companystatement")):
+        return "parent_company"
+    if any(marker in compact for marker in ("公允价值", "fairvalue", "风险敞口", "riskexposure")):
+        return "detail"
+    return "annual_or_unspecified"
+
+
+def _pair_reporting_scope_compatible(pair: AlignedPair) -> bool:
+    a_bucket = _scope_bucket(_point_scope_text(pair, "a"))
+    h_bucket = _scope_bucket(_point_scope_text(pair, "h"))
+    if a_bucket != h_bucket:
+        return False
+    if pair.a_point and pair.h_point and pair.a_point.period and pair.h_point.period:
+        return str(pair.a_point.period) == str(pair.h_point.period)
+    return True
 
 
 # ============================================================

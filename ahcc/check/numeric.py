@@ -12,16 +12,19 @@
 from __future__ import annotations
 
 import re
+import json
 import uuid
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import yaml
 from loguru import logger
 
+from ahcc.config import settings
+from ahcc.llm.client import cached_call
 from ahcc.schemas import (
     AlignedPair,
     DataPoint,
@@ -424,8 +427,164 @@ def _metric_search_text(item: MetricItem) -> str:
         item.name.en,
         item.evidence.section if item.evidence else None,
         item.evidence.snippet if item.evidence else None,
+        item.period,
         item.value_text,
     )
+
+
+def _is_quarterly_metric_context(item: MetricItem) -> bool:
+    text = _metric_search_text(item)
+    compact = re.sub(r"\s+", "", text)
+    if any(
+        marker in compact
+        for marker in (
+            "本年度分季度",
+            "分季度经营指标",
+            "第一季度",
+            "一季度",
+            "第1季度",
+            "1季度",
+            "第二季度",
+            "二季度",
+            "第2季度",
+            "2季度",
+            "第三季度",
+            "三季度",
+            "第3季度",
+            "3季度",
+            "第四季度",
+            "四季度",
+            "第4季度",
+            "4季度",
+            "quarterly",
+            "firstquarter",
+            "secondquarter",
+            "thirdquarter",
+            "fourthquarter",
+        )
+    ):
+        return True
+    return bool(re.search(r"(?<![a-z0-9])q[1-4](?![a-z0-9])|(?<![a-z0-9])[1-4]q(?![a-z0-9])", text))
+
+
+def _period_contexts_compatible(a_item: MetricItem, h_item: MetricItem) -> tuple[bool, str]:
+    a_quarter = _is_quarterly_metric_context(a_item)
+    h_quarter = _is_quarterly_metric_context(h_item)
+    if a_quarter != h_quarter:
+        return False, "period_context_mismatch:quarterly_vs_annual"
+    return True, "same_period_context"
+
+
+def _metric_llm_payload(item: MetricItem, norm_value: float) -> dict[str, Any]:
+    evidence = item.evidence
+    return {
+        "canonical_key": item.canonical_key,
+        "label_zh": item.name.zh,
+        "label_en": item.name.en,
+        "value": item.value,
+        "normalized_value": norm_value,
+        "value_text": item.value_text,
+        "unit": item.unit,
+        "currency": item.currency.value if item.currency else None,
+        "period": item.period,
+        "page": item.page,
+        "section": evidence.section if evidence else None,
+        "snippet": (evidence.snippet if evidence else "")[:500],
+        "source": item.source,
+    }
+
+
+def _llm_numeric_semantic_review(key: str, pair_score: _PairScore) -> dict[str, Any] | None:
+    if not getattr(settings, "numeric_use_llm_semantic_review", True):
+        return None
+    if not (settings.deepseek_api_key or "").strip():
+        return None
+    if not _needs_numeric_semantic_review(key, pair_score):
+        return None
+
+    payload = {
+        "metric": key,
+        "a": _metric_llm_payload(pair_score.a_item, pair_score.a_norm),
+        "h": _metric_llm_payload(pair_score.h_item, pair_score.h_norm),
+    }
+    prompt = (
+        "You are a financial reporting consistency reviewer. "
+        "Decide whether the two extracted metric values are truly comparable before a numeric difference is reported. "
+        "Use the surrounding section, page, period, table/row/column context and snippet. "
+        "Do not compare annual figures with quarterly, segment, parent-company, shareholder, fair-value, risk-exposure, or other different-scope figures. "
+        "If they are not the same reporting scope or you are confident one side is a quarter/segment/detail while the other is annual/main statement, set comparable=false. "
+        "You may only downgrade or require review; do not invent a difference. "
+        "Return strict JSON: {\"comparable\":true|false,\"confidence\":0.0,\"reason\":\"short reason\",\"a_scope\":\"\",\"h_scope\":\"\"}.\n\n"
+        f"Candidate:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+    result = cached_call(
+        "reason",
+        [{"role": "user", "content": prompt}],
+        json_mode=True,
+        temperature=0.0,
+        max_tokens=1024,
+    )
+    if isinstance(result, str) and result.strip():
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+    return result if isinstance(result, dict) else None
+
+
+def _needs_numeric_semantic_review(key: str, pair_score: _PairScore) -> bool:
+    """Gate DeepSeek calls to candidates where rules often miss reporting scope.
+
+    Straight main-statement comparisons stay deterministic and fast. LLM review is
+    reserved for key metrics, operating indicators, and high-level financial-data
+    tables where a row can be quarterly, segment-level, or an extracted detail.
+    """
+
+    text = f"{_metric_search_text(pair_score.a_item)} {_metric_search_text(pair_score.h_item)}"
+    compact = re.sub(r"\s+", "", text)
+    if any(
+        marker in text or marker in compact
+        for marker in (
+            "经营指标",
+            "分季度",
+            "季度",
+            "主要会计数据",
+            "主要财务指标",
+            "财务指标",
+            "财务摘要",
+            "operating indicator",
+            "financial indicator",
+            "financial highlights",
+            "key financial data",
+            "key accounting data",
+            "quarter",
+            "q1",
+            "q2",
+            "q3",
+            "q4",
+        )
+    ):
+        return True
+    if pair_score.context_note.startswith("compatible_context:"):
+        return True
+    if pair_score.period_score < 1.0:
+        return True
+    return False
+
+
+def _llm_downgrade_reason(key: str, pair_score: _PairScore) -> str | None:
+    review = _llm_numeric_semantic_review(key, pair_score)
+    if not review:
+        return None
+    comparable = review.get("comparable")
+    try:
+        confidence = float(review.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if comparable is False and confidence >= getattr(settings, "numeric_llm_review_min_confidence", 0.8):
+        reason = str(review.get("reason") or "LLM semantic review marked the candidate as non-comparable")
+        return reason[:240]
+    return None
 
 
 @lru_cache(maxsize=512)
@@ -505,6 +664,10 @@ def _candidate_bad_reason(item: MetricItem) -> str | None:
 
 
 def _contexts_compatible(key: str, a_item: MetricItem, h_item: MetricItem) -> tuple[bool, str]:
+    period_context_ok, period_context_note = _period_contexts_compatible(a_item, h_item)
+    if not period_context_ok:
+        return False, period_context_note
+
     a_bucket = _context_bucket(a_item)
     h_bucket = _context_bucket(h_item)
 
@@ -552,6 +715,9 @@ def _relative_delta(a_norm: float, h_norm: float) -> float:
 
 
 def _period_score(a_item: MetricItem, h_item: MetricItem) -> float:
+    period_context_ok, _ = _period_contexts_compatible(a_item, h_item)
+    if not period_context_ok:
+        return 0.0
     if not a_item.period or not h_item.period:
         return 0.8
     return 1.0 if a_item.period == h_item.period else 0.0
@@ -650,6 +816,9 @@ def _pair_for_score(key: str, pair_score: _PairScore, alignment_confidence: floa
 
 
 def _pair_match_kind(key: str, pair_score: _PairScore, rules: list[RuleDef], currency_factor: float | None) -> str | None:
+    if not pair_score.context_compatible:
+        return None
+
     tolerance = _find_tolerance(key, rules)
     tolerance_norm = tolerance * _get_unit_multiplier(pair_score.a_item.unit)
     delta = abs(pair_score.a_norm - pair_score.h_norm)
@@ -719,7 +888,13 @@ def _make_currency_conversion_diff(key: str, pair_score: _PairScore, factor: flo
     )
 
 
-def _make_unresolved_candidate_diff(key: str, pair_score: _PairScore, reason: str) -> Diff:
+def _make_unresolved_candidate_diff(
+    key: str,
+    pair_score: _PairScore,
+    reason: str,
+    *,
+    rule_id: str | None = None,
+) -> Diff:
     return Diff(
         diff_id=str(uuid.uuid4())[:8],
         diff_type=DiffType.NUMERIC,
@@ -749,7 +924,7 @@ def _make_unresolved_candidate_diff(key: str, pair_score: _PairScore, reason: st
             evidence=[pair_score.a_item.evidence, pair_score.h_item.evidence],
             review_hint=f"暂不判定为真实差异：{reason}；{pair_score.context_note}",
         ),
-        rule_id="context_mismatch" if not pair_score.context_compatible else "low_confidence_candidate",
+        rule_id=rule_id or ("context_mismatch" if not pair_score.context_compatible else "low_confidence_candidate"),
     )
 
 
@@ -905,6 +1080,18 @@ def run_numeric_checks_on_profiles(profile_a, profile_h) -> list[Diff]:
 
         best_score = max(pair_scores, key=lambda item: item.score)
         if _is_high_conf_same_scope(best_score):
+            llm_reason = _llm_downgrade_reason(key, best_score)
+            if llm_reason:
+                diffs.append(
+                    _make_unresolved_candidate_diff(
+                        key,
+                        best_score,
+                        f"llm_semantic_review:{llm_reason}",
+                        rule_id="llm_semantic_review",
+                    )
+                )
+                unresolved_candidates += 1
+                continue
             pair = _pair_for_score(key, best_score)
             pair_diffs = _check_pair(pair, rules)
             diffs.extend(pair_diffs)

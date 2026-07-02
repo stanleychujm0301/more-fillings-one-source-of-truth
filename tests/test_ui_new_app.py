@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,8 @@ APP_CSS = ROOT / "ui-new" / "src" / "App.css"
 VITE_CONFIG = ROOT / "ui-new" / "vite.config.ts"
 UI_NEW_INDEX = ROOT / "ui-new" / "index.html"
 API_MAIN = ROOT / "ahcc" / "api" / "main.py"
+API_ROUTES_JOB = ROOT / "ahcc" / "api" / "routes_job.py"
+ORCHESTRATOR = ROOT / "ahcc" / "orchestrator.py"
 DOCKERFILE = ROOT / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
 RENDER_YAML = ROOT / "render.yaml"
@@ -23,6 +26,10 @@ ROOT_NVMRC = ROOT / ".nvmrc"
 PYPROJECT = ROOT / "pyproject.toml"
 EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
 ZEABUR_DOC = ROOT / "docs" / "zeabur_deployment.md"
+
+
+def css_rule_bodies(css: str, selector: str) -> list[str]:
+    return re.findall(rf"{re.escape(selector)}\s*\{{([^}}]+)\}}", css)
 
 
 def test_ui_new_exposes_hash_routes_and_user_mode_api_hooks():
@@ -62,6 +69,22 @@ def test_ui_new_job_detail_polls_until_background_job_finishes():
 
     assert ".audit-conclusion-strip.running" in css
     assert ".audit-pill.running" in css
+
+
+def test_ui_new_surfaces_persisted_running_progress_summary():
+    source = APP_TSX.read_text(encoding="utf-8")
+
+    for token in (
+        "current_stage",
+        "current_percent",
+        "current_message",
+        "last_progress_at",
+        "runningProgressLabel",
+        "historyProgressLabel",
+        "job.comparison_summary",
+        "item.comparison_summary",
+    ):
+        assert token in source
 
 
 def test_ui_new_browser_title_uses_competition_project_name():
@@ -278,19 +301,59 @@ def test_ui_new_competition_polish_layer_unifies_full_app_visual_system():
         assert token in css
 
     for snippet in (
-        ":where(.primary, .ghost, .segmented button, .job-report-action-link, .command-history-link, .depth-option, .file-card):focus-visible",
+        ":where(.primary, .ghost, .segmented button, .job-report-action-link, .command-history-link, .depth-option, .visual-review-option, .file-card):focus-visible",
         ".panel,\n.command-surface,\n.profile-card,\n.bilingual-page-review,\n.review-shell,\n.dashboard-metric",
         ".status {\n  min-width: 56px;\n  max-width: 72px;",
         ".audit-project-title {\n  font-size: clamp(28px, 3.4vw, 42px);",
-        ".history-row,\n.job-row,\n.diff-command-row,\n.bilingual-page-row",
+        ".history-row,\n.job-row,\n.diff-drilldown-card,\n.diff-source-row,\n.bilingual-page-row",
         ".review-shell {\n  width: min(1420px, calc(100% - 32px));",
         ".review-grid {\n  grid-template-columns: minmax(280px, 0.78fr) minmax(420px, 1.2fr) minmax(280px, 0.82fr);",
         "@media (max-width: 720px) {\n  .competition-polish-mobile-sentinel",
-        ".diff-command-row,\n  .history-row {\n    min-width: 0;",
+        ".diff-source-row,\n  .history-row {\n    min-width: 0;",
     ):
         assert snippet in css
 
     assert "font-size: clamp(30px, 4.2vw, 52px)" not in css
+
+
+def test_ui_new_job_detail_cards_use_unified_surface_accent_not_left_strips():
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        "--card-accent: #00338d;",
+        "border-top: 2px solid var(--card-accent);",
+        "box-shadow: var(--surface-shadow)",
+    ):
+        assert token in css
+
+    for selector in (
+        ".audit-conclusion-strip",
+        ".dashboard-metric",
+        ".diff-drilldown-card",
+    ):
+        bodies = css_rule_bodies(css, selector)
+        assert bodies
+        assert any("border-top: 2px solid var(--card-accent);" in body for body in bodies)
+        assert all("border-left" not in body for body in bodies)
+
+    for selector in (
+        ".audit-conclusion-strip.risk",
+        ".audit-conclusion-strip.clean",
+        ".audit-conclusion-strip.running",
+        ".audit-conclusion-strip.failed",
+        ".dashboard-metric.critical",
+        ".dashboard-metric.warning",
+        ".dashboard-metric.teal",
+        ".diff-drilldown-card.critical",
+        ".diff-drilldown-card.warning",
+        ".diff-drilldown-card.expected",
+    ):
+        bodies = css_rule_bodies(css, selector)
+        assert bodies
+        assert any("--card-accent:" in body for body in bodies)
+        assert all("border-left" not in body for body in bodies)
+
+    assert ".branch-diagnostics" not in css
 
 
 def test_ui_new_profile_labels_and_depth_control_use_business_copy():
@@ -324,6 +387,61 @@ def test_ui_new_profile_labels_and_depth_control_use_business_copy():
         ".depth-option small",
     ):
         assert selector in css
+
+
+def test_ui_new_cockpit_adds_optional_strict_visual_review_mode():
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+    routes_job = API_ROUTES_JOB.read_text(encoding="utf-8")
+    orchestrator = ORCHESTRATOR.read_text(encoding="utf-8")
+
+    for token in (
+        "visualReviewMode: 'off' | 'smart' | 'strict'",
+        "visualReviewMode: 'off'",
+        "form.append('visual_review_mode', upload.visualReviewMode)",
+        "visual-review-control",
+        "visual-review-option",
+        "upload.visualReviewMode === 'off'",
+        "upload.visualReviewMode === 'smart'",
+        "upload.visualReviewMode === 'strict'",
+        "visual_review_mode: str = Form(\"off\")",
+        "normalized_visual_review_mode",
+        "visual_review_mode=normalized_visual_review_mode",
+        "visual_review_mode: str = \"off\"",
+        "visual_review_mode=visual_review_mode",
+    ):
+        assert token in source or token in routes_job or token in orchestrator
+
+    for token in (
+        "标准核查",
+        "智能视觉抽样",
+        "严格视觉核查",
+        "OCR",
+        "默认保证完成",
+    ):
+        assert token in source
+
+    for selector in (
+        ".visual-review-control",
+        ".visual-review-option",
+        ".visual-review-option.selected",
+        ".visual-review-note",
+    ):
+        assert selector in css
+
+
+def test_ui_new_surfaces_visual_ocr_status_diagnostics():
+    source = APP_TSX.read_text(encoding="utf-8")
+
+    for token in (
+        "visual_ocr_status",
+        "visualOcrStatusLabel",
+        "skipped_reason",
+        "ocr_page_count",
+        "runtime_ocr_disabled",
+        "easyocr_large_pdf",
+    ):
+        assert token in source
 
 
 def test_ui_new_profile_actions_align_and_job_submit_has_breathing_state():
@@ -539,7 +657,7 @@ def test_ui_new_job_detail_highlights_audit_profiles_and_dense_review_dashboard(
         "A 股画像",
         "H 股画像",
         "画像事实",
-        "指标 Key",
+        "全量指标",
         "叙述块",
         "结构节点",
         "提取预警",
@@ -555,7 +673,7 @@ def test_ui_new_job_detail_highlights_audit_profiles_and_dense_review_dashboard(
         "extraction_audit",
         "warning_count",
         "matched_event_count",
-        "coverage_count",
+        "internal_event_diff_count",
     ):
         assert field in source
 
@@ -565,10 +683,78 @@ def test_ui_new_job_detail_highlights_audit_profiles_and_dense_review_dashboard(
         "profile-showcase",
         "profile-card",
         "profile-preview-table",
-        "diff-command-table",
+        "diff-drilldown-board",
     ):
         assert token in source
         assert f".{token}" in css
+
+
+def test_ui_new_job_detail_removes_disclosure_coverage_from_review_queue():
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        "披露覆盖",
+        "披露/文本覆盖项",
+        "coverageCount",
+        "| 'coverage'",
+        "{ key: 'coverage'",
+        "diffScope === 'coverage'",
+        "coverageItems",
+        "coverage-review-list",
+        "coverage-review-row",
+    ):
+        assert token not in source
+
+    assert ".coverage-review-list" not in css
+    assert ".coverage-review-row" not in css
+
+
+def test_ui_new_job_detail_groups_diffs_by_triage_and_source_scope():
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        "type DiffTriageScope = 'real' | 'unresolved' | 'expected'",
+        "type DiffSourceScope = 'cross_report' | 'a_internal' | 'h_internal'",
+        "diff_scope?: DiffSourceScope | string | null",
+        "DIFF_TRIAGE_GROUPS",
+        "DIFF_SOURCE_GROUPS",
+        "selectedTriage",
+        "setSelectedTriage",
+        "selectedSource",
+        "setSelectedSource",
+        "activeDiffs",
+        "normalizedDiffScope",
+        "groupDiffsByTriageAndScope",
+        "A/H报告之间的不一致差异",
+        "A股报告自身存在的差异问题",
+        "H股报告自身存在的差异问题",
+        "真实差异",
+        "待人工复核差异",
+        "预期差异",
+        "diff-drilldown-board",
+        "diff-drilldown-grid",
+        "diff-drilldown-card",
+        "diff-active-queue",
+        "diff-source-row",
+        "aria-pressed",
+        "onClick={() => {",
+    ):
+        assert token in source
+
+    for token in (
+        ".diff-drilldown-board",
+        ".diff-drilldown-grid",
+        ".diff-drilldown-card",
+        ".diff-active-queue",
+        ".diff-source-row",
+    ):
+        assert token in css
+
+    assert "scopedDiffs.length ? scopedDiffs.map" not in source
+    assert "diff-scope-rail" not in source
+    assert ".diff-scope-rail" not in css
 
 
 def test_ui_new_job_detail_reframes_audit_title_and_uses_bilingual_page_review():
@@ -670,30 +856,34 @@ def test_health_endpoint_exposes_storage_persistence_diagnostics():
         assert token in api_main
 
 
-def test_ui_new_job_detail_surfaces_branch_disclosure_diagnostics():
+def test_health_endpoint_exposes_visual_ocr_availability():
+    api_main = API_MAIN.read_text(encoding="utf-8")
+
+    for token in (
+        '"visual_ocr"',
+        '"ocr_engine_available"',
+        '"paddleocr"',
+        '"easyocr"',
+        "_ocr_health",
+        "_PADDLEOCR_AVAILABLE",
+        "_EASYOCR_AVAILABLE",
+    ):
+        assert token in api_main
+
+
+def test_ui_new_job_detail_removes_standalone_branch_disclosure_diagnostics():
     source = APP_TSX.read_text(encoding="utf-8")
     css = APP_CSS.read_text(encoding="utf-8")
 
     for token in (
         "BranchDiagnosticsPanel",
-        "branch_source_doc_available",
-        "a_branch_count",
-        "h_branch_count",
-        "matched_branch_count",
-        "branch_diff_count",
-        "branch_alignment_ratio",
-        "summaryNumber(summary, 'branch_diff_count')",
-        "summaryNumber(summary, 'branch_alignment_ratio')",
+        "branch-diagnostics",
+        "Branch Disclosure Diagnostics",
+        "分支机构披露检查",
     ):
-        assert token in source
+        assert token not in source
 
-    for token in (
-        ".branch-diagnostics-panel",
-        ".branch-diagnostics-grid",
-        ".branch-diagnostics-card",
-        ".branch-diagnostics-note",
-    ):
-        assert token in css
+    assert ".branch-diagnostics" not in css
 
 
 def test_ui_new_job_detail_handles_missing_zeabur_job_with_latest_done_fallback():
@@ -774,6 +964,7 @@ def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():
 def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_origin():
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     dockerignore = DOCKERIGNORE.read_text(encoding="utf-8")
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
 
     for token in (
         "ARG NODE_IMAGE=node:22-bookworm-slim",
@@ -788,9 +979,11 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
         "ARG USE_ALIYUN_APT_MIRROR=0",
         "mirrors.aliyun.com/debian",
         "ARG PIP_INDEX_URL=https://pypi.org/simple",
+        "ARG INSTALL_OCR=1",
         "poppler-utils",
         "ghostscript",
         "python -m pip install --upgrade pip",
+        'python -m pip install --no-cache-dir -e ".[ocr]"',
         "COPY --from=ui-builder /app/ui-new/dist ./ui-new/dist",
         "ENV PORT=8080",
         "EXPOSE 8080",
@@ -810,6 +1003,8 @@ def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_orig
 
     assert "registry.cn-hangzhou.aliyuncs.com/library/node" not in dockerfile
     assert "registry.cn-hangzhou.aliyuncs.com/library/python" not in dockerfile
+    assert "ocr = [" in pyproject
+    assert '"paddleocr>=2.7"' in pyproject
 
 
 def test_zeabur_deployment_uses_full_stack_dockerfile_instead_of_static_node_build():

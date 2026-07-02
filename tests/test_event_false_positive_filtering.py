@@ -4,7 +4,7 @@ import pytest
 
 from ahcc.check.coverage import run_event_checks_on_profiles
 from ahcc.profile.models import ReportProfile
-from ahcc.schemas import Evidence, Language, ReportDocument, ReportSide, TextSegment
+from ahcc.schemas import DiffScope, DiffType, Evidence, Language, ReportDocument, ReportSide, TextSegment
 
 
 def _profile(side: ReportSide) -> ReportProfile:
@@ -66,6 +66,76 @@ def _profiles_with_event_texts(
     return profile_a, profile_h
 
 
+def _profile_with_same_side_event_texts(
+    side: ReportSide,
+    first_text: str,
+    second_text: str,
+    section: str = "significant_events",
+) -> tuple[ReportProfile, ReportProfile]:
+    source_doc = ReportDocument(
+        doc_id=side.value,
+        side=side,
+        file_path=f"{side.value}.pdf",
+        total_pages=100,
+        primary_language=Language.ZH,
+        texts=[
+            TextSegment(
+                segment_id=f"{side.value}-event-1",
+                page=30,
+                bbox=(0, 0, 1, 1),
+                text=first_text,
+                language=Language.ZH,
+                section=section,
+            ),
+            TextSegment(
+                segment_id=f"{side.value}-event-2",
+                page=80,
+                bbox=(0, 0, 1, 1),
+                text=second_text,
+                language=Language.ZH,
+                section=section,
+            ),
+        ],
+    )
+    profile_a = _profile(ReportSide.A_SHARE)
+    profile_h = _profile(ReportSide.H_SHARE)
+    if side == ReportSide.A_SHARE:
+        profile_a.source_doc = source_doc
+    else:
+        profile_h.source_doc = source_doc
+    return profile_a, profile_h
+
+
+def test_same_report_event_fact_mismatch_is_internal_diff() -> None:
+    first_text = "2025年3月1日，本行与阳光科技有限公司签订战略合作协议，金额为100万元。"
+    second_text = "2025年3月1日，本行与阳光科技有限公司签订战略合作协议，金额为120万元。"
+    profile_a, profile_h = _profile_with_same_side_event_texts(ReportSide.A_SHARE, first_text, second_text)
+
+    _, diffs = run_event_checks_on_profiles(profile_a, profile_h)
+
+    internal = next(diff for diff in diffs if diff.diff_scope == DiffScope.A_INTERNAL)
+    assert internal.diff_type == DiffType.INTERNAL
+    assert internal.triage == "real"
+    assert internal.diff_explanation is not None
+    assert internal.diff_explanation.items[0].a_page == 30
+    assert internal.diff_explanation.items[0].h_page == 80
+
+
+def test_same_report_related_party_events_with_different_counterparties_not_internal_diff() -> None:
+    first_text = "2025年2月25日，本行公告与中国太平保险有限公司发生关联交易，授信金额为150亿元。"
+    second_text = "2025年3月29日，本行公告与京城建设集团有限公司发生关联交易，授信金额为70亿元。"
+    profile_a, profile_h = _profile_with_same_side_event_texts(
+        ReportSide.A_SHARE,
+        first_text,
+        second_text,
+        section="related_party",
+    )
+
+    _, diffs = run_event_checks_on_profiles(profile_a, profile_h)
+
+    assert not any(diff.rule_id == "event_internal_fact_match" and diff.triage == "real" for diff in diffs)
+
+
 def test_unrelated_profit_distribution_events_not_real_diff() -> None:
     """光大银行样本质疑：不同利润分配方案不应被匹配为同一事项并生成差异。"""
     a_text = (
@@ -116,8 +186,12 @@ def test_related_party_without_counterparty_not_matched_to_specific_one() -> Non
     assert not any(diff.triage == "real" for diff in diffs)
 
 
-def test_bond_topic_not_labeled_as_related_party() -> None:
+def test_bond_topic_not_labeled_as_related_party(monkeypatch) -> None:
     """债券发行事项不应在 diff 中显示为关联交易。"""
+    from ahcc.check import coverage as coverage_check
+
+    monkeypatch.setattr(coverage_check.settings, "event_use_llm_semantic_review", False, raising=False)
+
     a_text = "本集团发行公司债券，发行金额为人民币200亿元。"
     h_text = "本集团发行公司债券，发行金额为人民币150亿元。"
     profile_a, profile_h = _profiles_with_event_texts(a_text, h_text, section="notes")
@@ -130,8 +204,12 @@ def test_bond_topic_not_labeled_as_related_party() -> None:
         assert "related party" not in diff.summary.en.lower()
 
 
-def test_real_event_diff_with_same_identity_anchor_still_detected() -> None:
+def test_real_event_diff_with_same_identity_anchor_still_detected(monkeypatch) -> None:
     """相同日期、相同对手方、不同金额的真实事件差异仍应被召回。"""
+    from ahcc.check import coverage as coverage_check
+
+    monkeypatch.setattr(coverage_check.settings, "event_use_llm_semantic_review", False, raising=False)
+
     a_text = "2025年3月1日，本行与阳光科技有限公司签订战略合作协议，金额为100万元。"
     h_text = "2025年3月1日，本行与阳光科技有限公司签订战略合作协议，金额为120万元。"
     profile_a, profile_h = _profiles_with_event_texts(a_text, h_text, section="significant_events")
@@ -142,6 +220,36 @@ def test_real_event_diff_with_same_identity_anchor_still_detected() -> None:
     assert len(diffs) == 1
     assert diffs[0].triage == "real"
     assert diffs[0].rule_id == "event_fact_match"
+
+
+def test_event_fact_match_uses_llm_to_downgrade_non_comparable_pair(monkeypatch) -> None:
+    from ahcc.check import coverage as coverage_check
+
+    calls: list[str] = []
+
+    def fake_cached_call(purpose, messages, *, json_mode=False, **kwargs):
+        calls.append(messages[0]["content"])
+        return {
+            "comparable": False,
+            "confidence": 0.94,
+            "reason": "The two disclosures mention similar cooperation wording but are not the same underlying event.",
+        }
+
+    monkeypatch.setattr(coverage_check.settings, "event_use_llm_semantic_review", True, raising=False)
+    monkeypatch.setattr(coverage_check.settings, "deepseek_api_key", "sk-real123")
+    monkeypatch.setattr(coverage_check, "cached_call", fake_cached_call, raising=False)
+
+    a_text = "2025年6月1日，本行与阳光科技有限公司签订战略合作协议，金额为100万元。"
+    h_text = "2025年6月1日，本行与阳光科技有限公司签订战略合作协议，金额为120万元。"
+    profile_a, profile_h = _profiles_with_event_texts(a_text, h_text, section="significant_events")
+
+    coverage, diffs = run_event_checks_on_profiles(profile_a, profile_h)
+
+    assert calls
+    assert "Return strict JSON" in calls[0]
+    assert any(item.status == "matched" for item in coverage)
+    assert not any(diff.rule_id == "event_fact_match" and diff.triage == "real" for diff in diffs)
+    assert any(diff.rule_id == "llm_semantic_review" and diff.triage == "unresolved" for diff in diffs)
 
 
 def test_multiple_similar_events_create_ambiguous_matches_not_real_diffs() -> None:
@@ -285,8 +393,12 @@ def test_financial_statement_note_number_not_share_count_diff() -> None:
     )
 
 
-def test_real_share_count_diff_still_detected() -> None:
+def test_real_share_count_diff_still_detected(monkeypatch) -> None:
     """真实的大额股本/股份数量差异仍应被召回。"""
+    from ahcc.check import coverage as coverage_check
+
+    monkeypatch.setattr(coverage_check.settings, "event_use_llm_semantic_review", False, raising=False)
+
     a_text = "本集团总股本为 25,039,945 千股。"
     h_text = "The Group total share capital was 26,000,000 thousand shares."
     profile_a, profile_h = _profiles_with_event_texts(a_text, h_text, section="share_changes")

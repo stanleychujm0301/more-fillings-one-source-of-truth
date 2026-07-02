@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -77,13 +78,30 @@ _RECOVERED_SQLITE_PATH = Path("./scratch/ahcc.recovered.db")
 def _connect_sqlite(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    # The Windows demo workspace has shown intermittent disk I/O errors when
-    # SQLite creates rollback journal files. Keep the journal in memory so the
-    # UI history remains readable and new job metadata can still be saved.
-    conn.execute("PRAGMA journal_mode=MEMORY")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=30000")
+    if os.name == "nt":
+        # The Windows demo workspace has shown intermittent disk I/O errors when
+        # SQLite creates rollback journal files. Keep the journal in memory so the
+        # UI history remains readable and new job metadata can still be saved.
+        _execute_best_effort_pragma(conn, "PRAGMA journal_mode=MEMORY")
+    else:
+        # Linux deployments (Zeabur/Render, persistent disk) don't hit that bug —
+        # use WAL so a killed/OOM'd process can't lose the last committed job update.
+        _execute_best_effort_pragma(conn, "PRAGMA journal_mode=WAL")
+    _execute_best_effort_pragma(conn, "PRAGMA synchronous=NORMAL")
     return conn
+
+
+def _execute_best_effort_pragma(conn: sqlite3.Connection, statement: str) -> None:
+    try:
+        conn.execute(statement)
+    except sqlite3.OperationalError as exc:
+        if not _is_database_locked(exc):
+            raise
+
+
+def _is_database_locked(exc: sqlite3.OperationalError) -> bool:
+    return "database is locked" in str(exc).lower()
 
 
 def _active_sqlite_path() -> Path:
@@ -185,8 +203,12 @@ def get_conn():
     db_path = _active_sqlite_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect_sqlite(db_path)
-    _ensure_schema(conn)
     try:
+        try:
+            _ensure_schema(conn)
+        except sqlite3.OperationalError as exc:
+            if not _is_database_locked(exc):
+                raise
         yield conn
     finally:
         conn.close()

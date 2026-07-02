@@ -15,6 +15,7 @@ from typing import Any
 
 from loguru import logger
 
+from ahcc.config import settings
 from ahcc.parser.audit import attach_audit, build_extraction_audit
 from ahcc.parser.table_extract import (
     extract_tables_camelot,
@@ -293,6 +294,104 @@ def _is_useful_a_raw_table(raw_table: list[list[str | None]]) -> bool:
     return len(non_empty) >= 4 and len(numeric_cells) >= 2
 
 
+def _extract_pymupdf_page_texts(file_path: str) -> dict[int, str]:
+    try:
+        import fitz
+    except ImportError:
+        return {}
+
+    result: dict[int, str] = {}
+    doc = None
+    try:
+        doc = fitz.open(file_path)
+        for idx, page in enumerate(doc, start=1):
+            text = page.get_text("text") or ""
+            if text.strip():
+                result[idx] = text
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"A share PyMuPDF text supplement skipped: {exc}")
+        return {}
+    finally:
+        if doc is not None:
+            doc.close()
+    return result
+
+
+def _compact_text_for_merge(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _merge_page_texts(pdfplumber_text: str, pymupdf_text: str) -> str:
+    left = (pdfplumber_text or "").strip()
+    right = (pymupdf_text or "").strip()
+    if not right:
+        return left
+    if not left:
+        return right
+
+    left_compact = _compact_text_for_merge(left)
+    right_compact = _compact_text_for_merge(right)
+    if right in left or right_compact in left_compact:
+        return left
+    if left in right or left_compact in right_compact:
+        return right
+    return f"{left}\n\n{right}"
+
+
+def _build_fast_pymupdf_a_doc(file_path: str, page_texts: dict[int, str]) -> ReportDocument:
+    texts: list[TextSegment] = []
+    scanned_pages = set(page_texts)
+    text_pages: set[int] = set()
+    for page_num in sorted(page_texts):
+        page_text = (page_texts.get(page_num) or "").strip()
+        if not page_text:
+            continue
+        text_pages.add(page_num)
+        texts.extend(_split_text(page_text, page_num))
+
+    total_pages = max(page_texts, default=0)
+    unit, currency = _detect_unit_currency(texts)
+    engines = {
+        "text": "pymupdf",
+        "tables": [],
+        "fast_text_only": True,
+        "pymupdf_text_pages": sorted(text_pages),
+        "pymupdf_text_page_count": len(text_pages),
+        "table_count": 0,
+        "table_pages": [],
+    }
+    table_coverage = _build_a_table_coverage(texts, set(), [])
+    doc = ReportDocument(
+        doc_id=Path(file_path).stem,
+        side=ReportSide.A_SHARE,
+        file_path=file_path,
+        total_pages=total_pages,
+        primary_language=Language.ZH,
+        tables=[],
+        texts=texts,
+        charts=[],
+        metadata={
+            "unit": unit,
+            "currency": currency.value if currency else None,
+            "extraction_engines": engines,
+            "table_count": 0,
+        },
+    )
+    audit = build_extraction_audit(
+        total_pages=total_pages,
+        scanned_pages=scanned_pages,
+        text_pages=text_pages,
+        table_pages=[],
+        text_segments=texts,
+        warning_flags=[],
+        warnings=[],
+        engines=engines,
+        table_coverage=table_coverage,
+    )
+    logger.info(f"A 股快速解析完成: {total_pages} 页, {len(texts)} 文本段, 跳过表格重型抽取")
+    return attach_audit(doc, audit)
+
+
 def parse_a_pdf(file_path: str) -> ReportDocument:
     """A 股 PDF 解析入口。
 
@@ -302,6 +401,10 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
     3. 表格数<30时才启用 camelot 补充
     """
     logger.info(f"开始解析 A 股 PDF: {file_path}")
+
+    pymupdf_page_texts = _extract_pymupdf_page_texts(file_path)
+    if pymupdf_page_texts and not settings.enable_a_share_table_extraction:
+        return _build_fast_pymupdf_a_doc(file_path, pymupdf_page_texts)
 
     try:
         import pdfplumber
@@ -319,6 +422,7 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
     pdfplumber_text_pages: set[int] = set()
     audit_flags: list[str] = []
     audit_warnings: list[str] = []
+    pymupdf_text_pages = set(pymupdf_page_texts)
 
     with pdfplumber.open(file_path) as pdf:
         total_pages = len(pdf.pages)
@@ -330,6 +434,7 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
                 page_text = ""
                 audit_flags.append("page_text_failed")
                 audit_warnings.append(f"Text extraction failed on page {i}: {e}")
+            page_text = _merge_page_texts(page_text, pymupdf_page_texts.get(i, ""))
 
             # 提取文本段（所有页面）
             if page_text:
@@ -420,6 +525,8 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
                 "tables": ["pdfplumber", "camelot", "ppstructure"],
                 "financial_page_count": len(financial_pages),
                 "pdfplumber_text_pages": sorted(pdfplumber_text_pages),
+                "pymupdf_text_pages": sorted(pymupdf_text_pages),
+                "pymupdf_text_page_count": len(pymupdf_text_pages),
                 "ppstructure": {"attempted": bool(pp_pages), "pages": pp_pages, "added_tables": ppstructure_added_tables},
             },
             "table_count": len(tables),
@@ -438,6 +545,8 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
             "tables": ["pdfplumber", "camelot", "ppstructure"],
             "financial_page_count": len(financial_pages),
             "pdfplumber_text_pages": sorted(pdfplumber_text_pages),
+            "pymupdf_text_pages": sorted(pymupdf_text_pages),
+            "pymupdf_text_page_count": len(pymupdf_text_pages),
             "table_count": len(tables),
             "table_pages": sorted(table_page_nums),
             "ppstructure": {"attempted": bool(pp_pages), "pages": pp_pages, "added_tables": ppstructure_added_tables},

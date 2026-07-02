@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,10 @@ from ahcc.api.routes_user import router as user_router
 from ahcc.config import settings
 from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION
 from ahcc.storage.models import init_db
+from ahcc.storage.repository import (
+    mark_interrupted_running_jobs_failed,
+    mark_stale_running_jobs_failed,
+)
 
 try:  # 结果 schema 版本（仅供 /health 自检；缺失不应影响启动）
     from ahcc.storage.repository import _CURRENT_RESULT_VERSION as RESULT_VERSION
@@ -33,12 +38,92 @@ UI_NEW_INDEX = UI_NEW_DIST / "index.html"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.ensure_dirs()
+    _setup_file_logging()
     init_db()
+    _cleanup_orphan_workers()
+    interrupted_count = mark_interrupted_running_jobs_failed()
+    if interrupted_count:
+        logger.warning(f"Marked interrupted running jobs as failed: {interrupted_count}")
     # 启动即打印引擎版本，便于一眼发现「改了代码但服务没重启」的旧进程
     logger.info(
         f"AHCC 启动：extraction_engine={EXTRACTION_ENGINE_VERSION} result_version={RESULT_VERSION}"
     )
-    yield
+    stale_task = asyncio.create_task(_mark_stale_jobs_periodically())
+    try:
+        yield
+    finally:
+        # 部分测试会全局 monkeypatch asyncio.create_task 以拦截任务调度，
+        # 此时返回的桩对象没有 .cancel()；只在拿到真实 Task 时才取消。
+        if hasattr(stale_task, "cancel"):
+            stale_task.cancel()
+
+
+def _setup_file_logging() -> None:
+    """任务/请求的 traceback 落盘 —— 此前 loguru 只写 stderr，重启后无法追查任务为何失败。"""
+    log_dir = Path(__file__).resolve().parents[2] / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            log_dir / "server.log",
+            rotation="20 MB",
+            retention=10,
+            level=settings.log_level,
+            backtrace=True,
+            diagnose=False,
+            enqueue=True,
+            encoding="utf-8",
+        )
+    except Exception as exc:  # pragma: no cover - 日志失败不应阻断启动
+        logger.warning(f"file logging setup failed: {exc}")
+
+
+async def _mark_stale_jobs_periodically() -> None:
+    """兜底：监督者自身异常退出时，超时未收尾的 running 任务由此标记失败。"""
+    stale_after = float(settings.job_timeout_seconds) + 120.0
+    while True:
+        await asyncio.sleep(60)
+        try:
+            count = mark_stale_running_jobs_failed(stale_after_seconds=stale_after)
+            if count:
+                logger.warning(f"Marked stale running jobs as failed: {count}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover
+            logger.warning(f"stale job sweep failed: {exc}")
+
+
+def _cleanup_orphan_workers() -> None:
+    """服务重启后清理上一进程遗留的 worker 子进程（按 heartbeat.json 记录的 pid）。"""
+    jobs_dir = settings.storage_dir / "jobs"
+    if not jobs_dir.is_dir():
+        return
+    import json
+
+    for heartbeat in jobs_dir.glob("*/heartbeat.json"):
+        try:
+            payload = json.loads(heartbeat.read_text(encoding="utf-8"))
+            pid = int(payload.get("pid") or 0)
+        except Exception:
+            continue
+        if pid <= 0:
+            continue
+        try:
+            import psutil  # type: ignore
+
+            proc = psutil.Process(pid)
+            if "ahcc.worker" in " ".join(proc.cmdline()):
+                proc.kill()
+                logger.warning(f"killed orphan worker pid={pid} ({heartbeat.parent.name})")
+        except ImportError:
+            # 无 psutil 时不盲杀 pid（可能已被复用），交由任务超时兜底
+            return
+        except Exception:
+            continue
+        finally:
+            try:
+                heartbeat.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 app = FastAPI(
@@ -64,7 +149,24 @@ def health() -> dict:
         "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
         "result_version": RESULT_VERSION,
         "branch_repair_version": 1,
+        "visual_ocr": _ocr_health(),
         "storage": _storage_health(),
+    }
+
+
+def _ocr_health() -> dict:
+    try:
+        from ahcc.parser.ocr_fallback import _EASYOCR_AVAILABLE, _PADDLEOCR_AVAILABLE
+    except Exception:  # pragma: no cover
+        return {
+            "ocr_engine_available": False,
+            "paddleocr": False,
+            "easyocr": False,
+        }
+    return {
+        "ocr_engine_available": bool(_PADDLEOCR_AVAILABLE or _EASYOCR_AVAILABLE),
+        "paddleocr": bool(_PADDLEOCR_AVAILABLE),
+        "easyocr": bool(_EASYOCR_AVAILABLE),
     }
 
 

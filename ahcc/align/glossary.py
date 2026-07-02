@@ -13,7 +13,14 @@ import csv
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Optional
+
+
+EMBEDDED_SHORT_CANONICAL_KEYS = {
+    "inventory",
+    "total_assets",
+}
 
 
 @dataclass(frozen=True)
@@ -56,12 +63,12 @@ CORE_TERMS: list[TermEntry] = [
     TermEntry("total_profit", "利润总额", "利潤總額", "Total profit", ("税前利润", "稅前利潤", "除税前溢利", "Profit before tax", "Profit before taxation", "Profit for the year", "Profit attributable to"),),
     TermEntry("income_tax", "所得税费用", "所得稅費用", "Income tax expense", ("所得稅", "税项", "稅項", "Taxation", "Income tax")),
     TermEntry("net_profit", "净利润", "淨利潤", "Net profit", ("归属于母公司股东的净利润", "歸屬於母公司股東的淨利潤", "股东应占溢利", "股東應佔溢利", "Profit for the year", "Net profit for the year")),
-    TermEntry("net_profit_attributable", "归属于母公司股东的净利润", "歸屬於母公司股東的淨利潤", "Net profit attributable to parent", ("归母净利润", "歸母淨利潤", "股东应占溢利", "股東應佔溢利", "Profit attributable to shareholders", "Profit attributable to equity holders", "Profit attributable to owners of the parent")),
+    TermEntry("net_profit_attributable", "归属于母公司股东的净利润", "歸屬於母公司股東的淨利潤", "Net profit attributable to parent", ("归母净利润", "歸母淨利潤", "归属净利润", "归属于上市公司股东的净利润", "归属本行股东净利润", "归属于本行股东的净利润", "归属本行股东的净利润", "股东应占溢利", "股東應佔溢利", "Profit attributable to shareholders", "Profit attributable to equity holders", "Profit attributable to owners of the parent")),
     TermEntry("operating_profit", "营业利润", "營業利潤", "Operating profit", ("经营利润", "經營利潤")),
     TermEntry("eps_basic", "基本每股收益", "基本每股盈利", "Basic earnings per share", ("每股盈利", "每股盈余", "每股盈餘")),
     TermEntry("eps_diluted", "稀释每股收益", "攤薄每股盈利", "Diluted earnings per share", ("稀释每股盈利", "攤薄每股盈利")),
     TermEntry("operating_cash_flow", "经营活动现金流量净额", "經營活動現金流量淨額", "Net cash from operating activities", (
-        "经营活动现金流", "經營活動現金流",
+        "经营活动现金流", "經營活動現金流", "经营活动现金流净额",
         "经营活动产生的现金流量净额", "經營活動產生的現金流量淨額",
         "经营活动所得现金流量净额", "經營活動所得現金流量淨額",
         "经营活动产生/(所用)的现金流量净额", "經營活動產生/(所用)的現金流量淨額",
@@ -69,10 +76,10 @@ CORE_TERMS: list[TermEntry] = [
     )),
     TermEntry("investing_cash_flow", "投资活动现金流量净额", "投資活動現金流量淨額", "Net cash from investing activities", ("投资活动现金流", "投資活動現金流")),
     TermEntry("financing_cash_flow", "筹资活动现金流量净额", "籌資活動現金流量淨額", "Net cash from financing activities", ("筹资活动现金流", "籌資活動現金流", "融资活动现金流", "融資活動現金流")),
-    TermEntry("cash_equivalents", "货币资金", "貨幣資金", "Cash and cash equivalents", ("现金及现金等价物", "現金及現金等價物", "银行存款", "銀行存款")),
-    TermEntry("cash_equivalents_end", "期末现金及现金等价物余额", "期末現金及現金等價物餘額", "Cash and cash equivalents at end", ("现金及现金等价物期末余额", "現金及現金等價物期末餘額")),
-    TermEntry("receivables", "应收账款", "應收賬款", "Trade receivables", ("应收款项", "應收款項", "应收帐款", "應收帳款")),
-    TermEntry("inventory", "存货", "存貨", "Inventories", ("库存", "庫存", "库存商品", "庫存商品")),
+    TermEntry("cash_equivalents", "货币资金", "貨幣資金", "Cash and cash equivalents", ("货币资金合计", "现金及现金等价物", "現金及現金等價物", "银行存款", "銀行存款")),
+    TermEntry("cash_equivalents_end", "期末现金及现金等价物余额", "期末現金及現金等價物餘額", "Cash and cash equivalents at end", ("现金及现金等价物期末余额", "現金及現金等價物期末餘額", "现金及现金等价物年末余额", "年末现金及现金等价物", "年末现金及现金等价物余额")),
+    TermEntry("receivables", "应收账款", "應收賬款", "Trade receivables", ("应收款项", "應收款項", "应收帐款", "應收帳款", "应收账款账面价值", "应收账款账面价值合计")),
+    TermEntry("inventory", "存货", "存貨", "Inventories", ("库存", "庫存", "库存商品", "庫存商品", "存货账面价值", "存货账面价值合计")),
     TermEntry("goodwill", "商誉", "商譽", "Goodwill", ()),
     TermEntry("intangible_assets", "无形资产", "無形資產", "Intangible assets", ("专利权", "專利權", "商标权", "商標權")),
     TermEntry("fixed_assets", "固定资产", "固定資產", "Property, plant and equipment", ("物业厂房设备", "物業廠房設備", "物业及设备", "物業及設備", "PPE")),
@@ -95,6 +102,7 @@ CORE_TERMS: list[TermEntry] = [
     TermEntry("other_debt_investments", "其他债权投资", "其他債權投資", "Other debt investments", ("以摊余成本计量的金融资产", "以攤余成本計量的金融資產", "持有至到期投资", "持有至到期投資")),
     TermEntry("other_equity_investments", "其他权益工具投资", "其他權益工具投資", "Other equity investments", ("以公允价值计量且其变动计入其他综合收益的金融资产", "以公允價值計量且其變動計入其他綜合收益的金融資產")),
     TermEntry("debt_investments", "债权投资", "債權投資", "Debt investments", ()),
+    TermEntry("financial_investments", "金融投资", "金融投資", "Financial investments", ("金融投资合计", "金融投資合計")),
     TermEntry("interest_receivable", "应收利息", "應收利息", "Interest receivable", ("应收股利", "應收股利")),
     TermEntry("interest_payable", "应付利息", "應付利息", "Interest payable", ("应付股利", "應付股利")),
     TermEntry("long_term_prepaid", "长期待摊费用", "長期待攤費用", "Long-term prepaid expenses", ("递延资产", "遞延資產")),
@@ -121,6 +129,7 @@ CORE_TERMS: list[TermEntry] = [
     TermEntry("other_income", "其他业务收入", "其他業務收入", "Other income", ("其他收入", "其他收入")),
     TermEntry("other_operating_income", "其他收益", "其他收益", "Other operating income", ("营业外收入", "營業外收入")),
     TermEntry("other_operating_cost", "其他业务成本", "其他業務成本", "Other operating cost", ("其他业务支出", "其他業務支出")),
+    TermEntry("taxes_and_surcharges", "税金及附加", "稅金及附加", "Taxes and surcharges", ("税金及附加合计", "稅金及附加合計", "营业税金及附加", "營業稅金及附加")),
     TermEntry("credit_impairment_loss", "信用减值损失", "信用減值損失", "Credit impairment loss", ("减值损失", "減值損失")),
     TermEntry("asset_impairment_loss", "资产减值损失", "資產減值損失", "Asset impairment loss", ("资产减值", "資產減值")),
     TermEntry("income_tax_expense", "所得税费用", "所得稅費用", "Income tax expense", ("所得税", "所得稅", "税项", "稅項")),
@@ -175,10 +184,10 @@ CORE_TERMS: list[TermEntry] = [
     TermEntry("client_margin_deposit", "客户保证金", "客戶保證金", "Client margin deposit", ("客户交易保证金", "客戶交易保證金")),
 
     # ---- 银行类 ----
-    TermEntry("customer_loans", "客户贷款及垫款", "客戶貸款及墊款", "Customer loans and advances", ("发放贷款及垫款", "發放貸款及墊款", "贷款及垫款", "貸款及墊款")),
-    TermEntry("customer_deposits", "吸收存款", "吸收存款", "Customer deposits", ("客户存款", "客戶存款")),
+    TermEntry("customer_loans", "客户贷款及垫款", "客戶貸款及墊款", "Customer loans and advances", ("发放贷款及垫款", "發放貸款及墊款", "贷款及垫款", "貸款及墊款", "发放贷款和垫款账面价值", "发放贷款及垫款账面价值")),
+    TermEntry("customer_deposits", "吸收存款", "吸收存款", "Customer deposits", ("吸收存款合计", "客户存款", "客戶存款")),
     TermEntry("interbank_deposits", "同业存放", "同業存放", "Interbank deposits", ("同业存放款项", "同業存放款項")),
-    TermEntry("central_bank_deposits", "存放中央银行款项", "存放中央銀行款項", "Deposits with central bank", ()),
+    TermEntry("central_bank_deposits", "存放中央银行款项", "存放中央銀行款項", "Deposits with central bank", ("现金及存放中央银行款项", "现金及存放中央银行款项合计")),
     TermEntry("loan_loss_provisions", "贷款减值准备", "貸款減值準備", "Loan impairment provisions", ("贷款损失准备", "貸款損失準備", "贷款拨备", "貸款撥備")),
 
     # ---- 保险类 ----
@@ -235,7 +244,7 @@ CORE_TERMS: list[TermEntry] = [
     TermEntry("other_non_current_assets", "其他非流动资产", "其他非流動資產", "Other non-current assets", ()),
     TermEntry("other_current_liabilities", "其他流动负债", "其他流動負債", "Other current liabilities", ()),
     TermEntry("other_non_current_liabilities", "其他非流动负债", "其他非流動負債", "Other non-current liabilities", ()),
-    TermEntry("parent_equity", "归属于母公司所有者权益合计", "歸屬於母公司所有者權益合計", "Equity attributable to parent", ("归属于母公司股东权益", "歸屬於母公司股東權益")),
+    TermEntry("parent_equity", "归属于母公司所有者权益合计", "歸屬於母公司所有者權益合計", "Equity attributable to parent", ("归属于母公司股东权益", "歸屬於母公司股東權益", "归属净资产", "归属于母公司所有者权益", "归属于母公司股东权益合计")),
     TermEntry("total_comprehensive_income", "综合收益总额", "綜合收益總額", "Total comprehensive income", ()),
     TermEntry("comprehensive_income_parent", "归属于母公司所有者的综合收益总额", "歸屬於母公司所有者的綜合收益總額", "Comprehensive income attributable to parent", ()),
 ]
@@ -245,6 +254,49 @@ CORE_TERMS: list[TermEntry] = [
 # 简繁转换字典（轻量级，覆盖财务领域高频差异字）
 # 若需完整转换，建议安装 opencc-python: pip install opencc-python-reimplemented
 # ============================================================
+
+CORE_TERMS.extend(
+    [
+        TermEntry(
+            "average_total_asset_return",
+            "平均总资产收益率",
+            "平均總資產收益率",
+            "Average return on total assets",
+            ("Return on average total assets", "Average ROA"),
+        ),
+        TermEntry(
+            "weighted_average_roe",
+            "加权平均净资产收益率",
+            "加權平均淨資產收益率",
+            "Weighted average ROE",
+            ("加权平均ROE", "加权ROE", "Weighted average return on equity", "Weighted average return on net assets"),
+        ),
+        TermEntry(
+            "fully_diluted_roe",
+            "全面摊薄净资产收益率",
+            "全面攤薄淨資產收益率",
+            "Fully diluted ROE",
+            ("Fully diluted return on net assets", "Fully diluted return on equity"),
+        ),
+        TermEntry("net_interest_spread", "净利差", "淨利差", "Net interest spread", ()),
+        TermEntry("net_interest_margin", "净利息收益率", "淨利息收益率", "Net interest margin", ()),
+        TermEntry(
+            "cost_to_income_ratio",
+            "成本收入比",
+            "成本收入比",
+            "Cost-to-income ratio",
+            ("Cost to income ratio",),
+        ),
+        TermEntry(
+            "non_performing_loan_ratio",
+            "不良贷款率",
+            "不良貸款率",
+            "Non-performing loan ratio",
+            ("不良率", "NPL ratio", "Non performing loan ratio"),
+        ),
+    ]
+)
+
 
 S2T_OVERRIDES: dict[str, str] = {
     # 财务领域常见简繁差异（注意香港繁体与台湾繁体的区别）
@@ -335,6 +387,18 @@ def to_simplified(text: str) -> str:
     return result
 
 
+def _compact_lookup_text(text: str) -> str:
+    return "".join(ch.lower() for ch in text or "" if ch.isalnum())
+
+
+def _is_embedded_lookup_candidate(text: str, canonical: str) -> bool:
+    if len(text) < 4:
+        return canonical in EMBEDDED_SHORT_CANONICAL_KEYS and len(text) >= 2
+    if re.fullmatch(r"\d+", text):
+        return False
+    return True
+
+
 # ============================================================
 # Glossary 查询引擎（供 matcher.py 调用）
 # ============================================================
@@ -358,6 +422,7 @@ class Glossary:
                 # 同时索引简体和繁体版本，确保无论输入什么形式都能命中
                 self._to_canonical[to_simplified(form).lower()] = t.canonical_key
                 self._to_canonical[to_traditional(form).lower()] = t.canonical_key
+        self._embedded_terms = self._build_embedded_terms()
 
     def lookup(self, text: str) -> Optional[str]:
         """将任意语言的术语文本转为 canonical_key。
@@ -377,6 +442,29 @@ class Glossary:
         key_t = to_traditional(key)
         if key_t in self._to_canonical:
             return self._to_canonical[key_t]
+        embedded = self._lookup_embedded_term(key)
+        if embedded:
+            return embedded
+        return None
+
+    def _build_embedded_terms(self) -> list[tuple[str, str]]:
+        terms: dict[str, str] = {}
+        for form, canonical in self._to_canonical.items():
+            compact = _compact_lookup_text(form)
+            if _is_embedded_lookup_candidate(compact, canonical):
+                terms[compact] = canonical
+        return sorted(terms.items(), key=lambda item: len(item[0]), reverse=True)
+
+    def _lookup_embedded_term(self, text: str) -> Optional[str]:
+        variants = {
+            _compact_lookup_text(text),
+            _compact_lookup_text(to_simplified(text)),
+            _compact_lookup_text(to_traditional(text)),
+        }
+        variants.discard("")
+        for form, canonical in self._embedded_terms:
+            if any(form in variant for variant in variants):
+                return canonical
         return None
 
     def get_entry(self, canonical_key: str) -> Optional[TermEntry]:

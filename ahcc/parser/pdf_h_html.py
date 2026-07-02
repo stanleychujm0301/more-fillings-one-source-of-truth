@@ -11,8 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -25,6 +26,23 @@ from ahcc.parser.table_extract import (
 )
 
 H_PDF_CACHE_VERSION = "h_pdf_v3"
+
+# 解析心跳回调：长页循环（尤其乱码页 OCR 兜底）每页触发一次，供 worker 子进程刷新
+# heartbeat 文件，避免"预算内但慢"的解析被父进程误判为卡死。inline 模式保持 None。
+_parse_heartbeat: Callable[[], None] | None = None
+
+
+def set_parse_heartbeat(callback: Callable[[], None] | None) -> None:
+    global _parse_heartbeat
+    _parse_heartbeat = callback
+
+
+def _emit_parse_heartbeat() -> None:
+    if _parse_heartbeat is not None:
+        try:
+            _parse_heartbeat()
+        except Exception:  # pragma: no cover - 心跳失败不影响解析
+            pass
 
 
 def _h_pdf_cache_dir() -> Path:
@@ -820,6 +838,12 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
     statement_pages: set[int] = set()
     garbled_fallback_count = 0  # 乱码页 pdfplumber 回退计数
     ocr_recovered_pages: set[int] = set()  # OCR 成功恢复的页码
+    # 乱码页 OCR 兜底预算：扫描版 PDF 可能几百页全部乱码，无预算时每页 OCR 会把任务
+    # 拖到数小时（历史任务卡死 33000+ 秒的根因）。超预算的乱码页跳过 OCR、只记 warning。
+    garbled_ocr_started = time.monotonic()
+    garbled_ocr_pages_used = 0
+    garbled_ocr_budget_exhausted = False
+    fallback_pdf = None  # 共享 pdfplumber 句柄——此前每个乱码页重开一次整个 PDF
     try:
         doc = fitz.open(file_path)
         total_pages = len(doc)
@@ -827,6 +851,7 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
             page_num = page_idx + 1
             page = doc[page_idx]
             scanned_pages.add(page_num)
+            _emit_parse_heartbeat()
             try:
                 page_text = page.get_text() or ""
             except Exception as e:
@@ -842,11 +867,12 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
                     f"(len={len(page_text)}, readable_ratio={len(re.findall(r'[a-zA-Z一-鿿]', page_text))/max(len(page_text), 1):.2f})"
                 )
                 try:
-                    with pdfplumber.open(file_path) as fallback_pdf:
-                        if page_num <= len(fallback_pdf.pages):
-                            fb_text = fallback_pdf.pages[page_num - 1].extract_text() or ""
-                        else:
-                            fb_text = ""
+                    if fallback_pdf is None:
+                        fallback_pdf = pdfplumber.open(file_path)
+                    if page_num <= len(fallback_pdf.pages):
+                        fb_text = fallback_pdf.pages[page_num - 1].extract_text() or ""
+                    else:
+                        fb_text = ""
                 except Exception:
                     fb_text = ""
                 if fb_text and not _is_h_garbled(fb_text):
@@ -854,23 +880,43 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
                     garbled_fallback_count += 1
                     logger.info(f"PyMuPDF p{page_num} pdfplumber 回退成功")
                 else:
-                    logger.warning(f"PyMuPDF p{page_num} pdfplumber 回退也失败，尝试 OCR")
-                    try:
-                        from ahcc.parser.ocr_fallback import ocr_page
+                    ocr_budget_ok = (
+                        garbled_ocr_pages_used < settings.parse_garbled_ocr_max_pages
+                        and time.monotonic() - garbled_ocr_started < settings.parse_garbled_ocr_max_seconds
+                    )
+                    if not ocr_budget_ok:
+                        if not garbled_ocr_budget_exhausted:
+                            garbled_ocr_budget_exhausted = True
+                            audit_flags.append("garbled_ocr_budget_exhausted")
+                            audit_warnings.append(
+                                f"Garbled-page OCR budget exhausted after {garbled_ocr_pages_used} page(s); "
+                                "remaining garbled pages keep raw text."
+                            )
+                            logger.warning(
+                                f"乱码页 OCR 预算用尽（{garbled_ocr_pages_used} 页 / "
+                                f"{time.monotonic() - garbled_ocr_started:.0f}s），后续乱码页跳过 OCR"
+                            )
+                        audit_warnings.append(f"Page {page_num} text may be garbled (OCR skipped: budget)")
+                    else:
+                        logger.warning(f"PyMuPDF p{page_num} pdfplumber 回退也失败，尝试 OCR")
+                        try:
+                            from ahcc.parser.ocr_fallback import ocr_page
 
-                        ocr_result = ocr_page(file_path, page_num, dpi=200)
-                        ocr_text = "\n".join(r["text"] for r in ocr_result if r.get("text"))
-                        if ocr_text and not _is_h_garbled_loose(ocr_text):
-                            page_text = ocr_text
-                            ocr_recovered_pages.add(page_num)
-                            garbled_fallback_count += 1
-                            logger.info(f"PyMuPDF p{page_num} OCR 回退成功")
-                        else:
-                            logger.warning(f"PyMuPDF p{page_num} OCR 也失败，保留原始文本")
+                            garbled_ocr_pages_used += 1
+                            ocr_result = ocr_page(file_path, page_num, dpi=200)
+                            ocr_text = "\n".join(r["text"] for r in ocr_result if r.get("text"))
+                            if ocr_text and not _is_h_garbled_loose(ocr_text):
+                                page_text = ocr_text
+                                ocr_recovered_pages.add(page_num)
+                                garbled_fallback_count += 1
+                                logger.info(f"PyMuPDF p{page_num} OCR 回退成功")
+                            else:
+                                logger.warning(f"PyMuPDF p{page_num} OCR 也失败，保留原始文本")
+                                audit_warnings.append(f"Page {page_num} text may be garbled (both engines)")
+                        except Exception as ocr_e:
+                            logger.warning(f"PyMuPDF p{page_num} OCR 异常: {ocr_e}")
                             audit_warnings.append(f"Page {page_num} text may be garbled (both engines)")
-                    except Exception as ocr_e:
-                        logger.warning(f"PyMuPDF p{page_num} OCR 异常: {ocr_e}")
-                        audit_warnings.append(f"Page {page_num} text may be garbled (both engines)")
+                        _emit_parse_heartbeat()
             page_texts[page_num] = page_text
             if page_text:
                 text_pages.add(page_num)
@@ -915,6 +961,12 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
             financial_pages = set(range(1, total_pages + 1))
         if not statement_pages:
             statement_pages = set(range(1, total_pages + 1))
+    finally:
+        if fallback_pdf is not None:
+            try:
+                fallback_pdf.close()
+            except Exception:  # pragma: no cover
+                pass
 
     # 传播章节类型到延续页（BS/PL/CF/Equity 通常跨多页）
     _propagate_statement_sections(texts)
