@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -15,16 +14,9 @@ API_ROUTES_JOB = ROOT / "ahcc" / "api" / "routes_job.py"
 ORCHESTRATOR = ROOT / "ahcc" / "orchestrator.py"
 DOCKERFILE = ROOT / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
-RENDER_YAML = ROOT / "render.yaml"
 START_COMPETITION = ROOT / "scripts" / "start_competition.ps1"
 README = ROOT / "README.md"
-ROOT_PACKAGE_JSON = ROOT / "package.json"
-ROOT_PACKAGE_LOCK = ROOT / "package-lock.json"
-ROOT_NPMRC = ROOT / ".npmrc"
-ROOT_NODE_VERSION = ROOT / ".node-version"
-ROOT_NVMRC = ROOT / ".nvmrc"
 PYPROJECT = ROOT / "pyproject.toml"
-EDGEONE_DOC = ROOT / "docs" / "edgeone_deployment.md"
 ZEABUR_DOC = ROOT / "docs" / "zeabur_deployment.md"
 
 
@@ -829,7 +821,7 @@ def test_ui_new_download_links_bust_browser_cache_for_latest_reports():
     assert "reportUrl(job.job_id, 'pdf')" in source
 
 
-def test_ui_new_is_served_from_root_and_static_legacy_moves_to_legacy_route():
+def test_ui_new_is_served_from_root_and_app_routes():
     vite_config = VITE_CONFIG.read_text(encoding="utf-8")
     api_main = API_MAIN.read_text(encoding="utf-8")
 
@@ -839,7 +831,7 @@ def test_ui_new_is_served_from_root_and_static_legacy_moves_to_legacy_route():
     assert 'def index_html() -> FileResponse:\n    return _no_cache_ui_new_index()' in api_main
     assert '@app.get("/app"' in api_main
     assert 'app.mount("/app/assets"' in api_main
-    assert 'app.mount("/legacy", StaticFiles' in api_main
+    assert 'app.mount("/legacy"' not in api_main
     assert 'app.mount("/", StaticFiles' not in api_main
 
 
@@ -929,48 +921,6 @@ def test_backend_declares_opencc_for_deployment_parity():
     assert "opencc-python-reimplemented" in pyproject
 
 
-def test_edgeone_pages_can_host_static_ui_and_proxy_to_fastapi_backend():
-    vite_config = VITE_CONFIG.read_text(encoding="utf-8")
-    app_source = APP_TSX.read_text(encoding="utf-8")
-    doc = EDGEONE_DOC.read_text(encoding="utf-8")
-    root_package = json.loads(ROOT_PACKAGE_JSON.read_text(encoding="utf-8"))
-    root_lock = json.loads(ROOT_PACKAGE_LOCK.read_text(encoding="utf-8"))
-    npmrc = ROOT_NPMRC.read_text(encoding="utf-8")
-
-    assert "VITE_BASE_PATH" in vite_config
-    assert "VITE_API_ORIGIN" in app_source
-    assert "apiUrl(url)" in app_source
-    assert "reportUrl(" in app_source
-    assert "import.meta.env.VITE_API_ORIGIN" in app_source
-    assert root_package["private"] is True
-    assert root_package["scripts"]["install:ui"] == "npm --prefix ui-new ci"
-    assert root_package["scripts"]["postinstall"] == "npm --prefix ui-new ci"
-    assert root_package["scripts"]["build"] == "npm --prefix ui-new run build"
-    assert root_package["engines"]["node"] == ">=20"
-    assert root_lock["name"] == "more-fillings-one-source-of-truth"
-    assert root_lock["packages"][""]["hasInstallScript"] is True
-    assert ROOT_NODE_VERSION.read_text(encoding="utf-8").strip() == "20"
-    assert ROOT_NVMRC.read_text(encoding="utf-8").strip() == "20"
-    assert "registry=https://registry.npmmirror.com/" in npmrc
-
-    for token in (
-        "Tencent EdgeOne Pages Deployment",
-        "static frontend",
-        "VITE_API_ORIGIN=https://<backend-origin>",
-        "VITE_BASE_PATH=/",
-        "Install command: npm ci",
-        "Build command: npm run build",
-        "Output directory: ui-new/dist",
-        "Node version: 20 or 22",
-        "NODE_VERSION=20",
-        "https://<edgeone-domain>/#/cockpit",
-    ):
-        assert token in doc
-
-    assert "functions/" not in doc
-    assert "BACKEND_ORIGIN" not in doc
-
-
 def test_competition_docker_deployment_builds_react_and_serves_fastapi_same_origin():
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     dockerignore = DOCKERIGNORE.read_text(encoding="utf-8")
@@ -1031,27 +981,6 @@ def test_zeabur_deployment_uses_full_stack_dockerfile_instead_of_static_node_bui
         "STORAGE_DIR=/var/data/storage",
         "https://<zeabur-domain>/app#/cockpit",
         "/health",
-    ):
-        assert token in source
-
-
-def test_render_blueprint_exposes_public_full_stack_entry_with_health_check():
-    source = RENDER_YAML.read_text(encoding="utf-8")
-
-    for token in (
-        "name: ahcc-competition",
-        "type: web",
-        "env: docker",
-        "dockerfilePath: ./Dockerfile",
-        "healthCheckPath: /health",
-        "APP_ENV",
-        "production",
-        "STORAGE_DIR",
-        "/var/data/storage",
-        "SQLITE_PATH",
-        "DEEPSEEK_API_KEY",
-        "sync: false",
-        "mountPath: /var/data",
     ):
         assert token in source
 

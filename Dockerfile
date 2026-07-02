@@ -53,7 +53,6 @@ COPY pyproject.toml README.md ./
 COPY ahcc ./ahcc
 COPY kb ./kb
 COPY rules ./rules
-COPY ui ./ui
 COPY --from=ui-builder /app/ui-new/dist ./ui-new/dist
 
 RUN python -m pip install --upgrade pip -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \

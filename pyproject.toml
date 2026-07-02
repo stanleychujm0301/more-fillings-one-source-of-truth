@@ -34,8 +34,6 @@ dependencies = [
     "openpyxl>=3.1",
     "reportlab>=4.2",
     "matplotlib>=3.8",        # PDF/Excel 共用的精致分布图（甜甜圈/水平条）渲染
-    "python-docx>=1.1",       # 工作底稿 Word 附件
-    "python-pptx>=1.0",       # 路演 PPT
 
     # 工具
     "rich>=13.7",             # CLI 输出美化

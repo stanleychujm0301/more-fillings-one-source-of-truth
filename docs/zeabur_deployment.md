@@ -32,8 +32,7 @@ Port: 8080
 ```
 
 If Zeabur offers multiple detected project types, choose Dockerfile instead of
-Node.js, Vite, or Static Site. The root `package.json` exists for EdgeOne static
-deployment compatibility, but Zeabur should run the full-stack Dockerfile.
+Node.js, Vite, or Static Site. Zeabur should run the full-stack Dockerfile.
 
 ## 2. Environment Variables
 

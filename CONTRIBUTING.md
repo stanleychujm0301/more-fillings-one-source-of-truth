@@ -59,8 +59,7 @@ python -m pytest tests/ -q --tb=short
 ## 目录说明
 
 - `ahcc/` — 核心 Python 包
-- `ui/static/` — 正式前端
-- `archive/internal/` — 历史 Streamlit UI 与黑客松内部文档
+- `ui-new/` — React 前端（FastAPI 同源挂载）
 - `kb/` — CAS/IFRS 准则知识库
 - `rules/` — YAML 规则定义
 - `scripts/` — 构建、评估、样例生成等核心脚本

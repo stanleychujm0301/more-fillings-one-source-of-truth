@@ -5,7 +5,7 @@
 ## 1. 整体数据流
 
 ```
-[Streamlit UI]
+[React UI (ui-new)]
     ↓ POST /api/jobs/  (upload A.pdf + H.pdf)
 [FastAPI Orchestrator]
     ↓
@@ -18,11 +18,11 @@
     ├─ StandardChecker (RAG + LLM 准则推理)       → 模块 B (亮点 1)
     └─ ChartChecker (VLM 抽图表数据三方核对)      → 模块 C (亮点 2)
     ↓
-[ReportBuilder]  生成 Excel / PDF / Word 工作底稿附件
+[ReportBuilder]  生成 Excel / PDF / HTML 报告
     ↓
 [SQLite + 文件系统]  持久化 Job / Diffs / Reviews
     ↓
-[Streamlit UI]  差异表 + PDF 高亮预览 + 审计师覆盖
+[React UI]  差异表 + PDF 高亮预览 + 审计师覆盖
 ```
 
 ## 2. 模块依赖图

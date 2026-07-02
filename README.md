@@ -15,7 +15,7 @@ docker build -t ahcc-competition .
 docker run --rm -p 8001:8080 -e DEEPSEEK_API_KEY=sk-xxx ahcc-competition
 ```
 
-Render/Railway/Fly.io 等支持 Docker Web Service 的平台可直接使用仓库根目录的 `Dockerfile`；Render 可使用 `render.yaml`，并在平台控制台配置 `DEEPSEEK_API_KEY`。部署后用 `/health` 检查服务，再打开公网 `/app#/cockpit` 上传 PDF、生成任务并下载新版 PDF/Excel 报告。
+Zeabur/Railway/Fly.io 等支持 Docker Web Service 的平台可直接使用仓库根目录的 `Dockerfile`（Zeabur 详细步骤见 `docs/zeabur_deployment.md`），并在平台控制台配置 `DEEPSEEK_API_KEY`。部署后用 `/health` 检查服务，再打开公网 `/app#/cockpit` 上传 PDF、生成任务并下载新版 PDF/Excel 报告。
 
 本地或现场兜底演示可运行：
 
@@ -41,7 +41,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 | **亮点 1：准则差异解读** | 基于 CAS/IFRS 知识库进行 RAG 推理，输出准则引用与解读 |
 | **亮点 2：图表交叉核对** | 多模态比对图表与表格数据，识别图表-表格不一致 |
 
-输出格式：Excel、PDF、Word 工作底稿、PPT 路演稿。
+输出格式：Excel、PDF、HTML 报告。
 
 ### 任务执行架构
 
@@ -105,8 +105,7 @@ python -m uvicorn ahcc.api.main:app --reload --port 8000
 
 ```
 ahcc/              核心 Python 包（数据契约 / 解析 / 检查 / RAG / LLM / 报告）
-ui/static/         正式 HTML 前端（单页应用，由 FastAPI 挂载）
-archive/internal/  历史 Streamlit 前端与黑客松内部文档归档
+ui-new/            React 前端（由 FastAPI 同源挂载到 / 与 /app）
 kb/                知识库（准则差异 15 条 + 中英术语对照 + 披露框架映射）
 rules/             YAML 规则（数值 / 勾稽 / 披露三类）
 storage/           运行时存储（默认 .gitignore，不上传）
@@ -118,8 +117,6 @@ scripts/generate_sample_report.py  生成示例 PDF/Excel 报告
 docs/              架构、演示脚本、风险登记
 tests/             单元测试
 ```
-
-> 说明：早期 Streamlit 前端代码（`ui/app.py`、`ui/pages/`、`ui/components/`）已归档到 `archive/internal/ui-streamlit-legacy/`。
 
 ---
 

@@ -24,9 +24,6 @@ env/
 /storage/*
 !/storage/.gitkeep
 
-# Streamlit
-.streamlit/secrets.toml
-
 # IDE
 .vscode/
 .idea/
