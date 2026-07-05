@@ -1784,25 +1784,26 @@ body {
   left: 0;
   width: 3px;
   border-radius: 999px;
-  background: linear-gradient(180deg, var(--navy), rgba(0, 163, 224, 0.72));
+  background: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0.3));
   content: "";
 }
 
 .command-hero-copy .eyebrow {
   margin: 0;
+  color: rgba(255, 255, 255, 0.76);
   font-size: 11px;
   font-weight: 820;
 }
 
 .command-hero-copy .panel-copy {
   max-width: 560px;
-  color: #526071;
+  color: rgba(255, 255, 255, 0.74);
   font-size: 12.5px;
   line-height: 1.65;
 }
 
 .command-hero h2 {
-  color: #0b1220;
+  color: #fff;
   font-size: clamp(28px, 3vw, 34px);
   font-weight: 820;
   line-height: 1.05;
@@ -1821,10 +1822,11 @@ body {
   gap: 6px;
   min-height: 34px;
   padding: 6px 11px;
-  color: var(--navy);
-  border: 1px solid rgba(0, 51, 141, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.26);
   border-radius: 999px;
-  background: rgba(238, 245, 255, 0.82);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
   font-size: 12px;
   font-weight: 760;
 }
@@ -3423,7 +3425,11 @@ html {
   box-shadow: var(--surface-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
-.app-toolbar,
+.app-toolbar {
+  border-color: var(--surface-border);
+  box-shadow: var(--shadow-rest);
+}
+
 .page-context-bar.has-ticker,
 .job-report-action-link,
 .notice,
@@ -3501,10 +3507,15 @@ html {
 }
 
 .command-hero {
-  padding: 30px 32px 24px;
+  padding: 34px 32px 28px;
+  overflow: hidden;
+  border-bottom: 0;
+  color: #fff;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 253, 0.84)),
-    radial-gradient(circle at 88% 0%, rgba(0, 163, 224, 0.12), transparent 24rem);
+    radial-gradient(circle at 90% -12%, rgba(0, 163, 224, 0.38), transparent 26rem),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 96px),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 96px),
+    linear-gradient(135deg, var(--navy-deep), var(--navy));
 }
 
 .command-hero h2 {
