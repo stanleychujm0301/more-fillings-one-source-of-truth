@@ -5,7 +5,29 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_TSX = ROOT / "ui-new" / "src" / "App.tsx"
+
+
+class _UiNewSourceBundle:
+    """Aggregates every ui-new/src/*.ts(x) file into one concatenated source.
+
+    App.tsx used to hold every component, type and pure helper function in a
+    single ~2100-line file. That helper logic has since been split out into
+    sibling modules (see format.ts, icons.tsx) to keep App.tsx focused on
+    components/state. Tests below assert on exact source text/tokens that
+    used to live physically inside App.tsx; reading the whole src/ directory
+    keeps those assertions valid regardless of which module a given token
+    now lives in.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self._directory = directory
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        paths = sorted(set(self._directory.rglob("*.ts")) | set(self._directory.rglob("*.tsx")))
+        return "\n".join(path.read_text(encoding=encoding) for path in paths)
+
+
+APP_TSX = _UiNewSourceBundle(ROOT / "ui-new" / "src")
 APP_CSS = ROOT / "ui-new" / "src" / "App.css"
 VITE_CONFIG = ROOT / "ui-new" / "vite.config.ts"
 UI_NEW_INDEX = ROOT / "ui-new" / "index.html"
