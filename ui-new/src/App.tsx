@@ -277,12 +277,21 @@ const EMPTY_UPLOAD: UploadState = {
 
 function parseRoute(): Route {
   const hash = window.location.hash || '#/cockpit'
-  if (hash.startsWith('#/jobs/')) {
-    return { page: 'job', jobId: decodeURIComponent(hash.slice('#/jobs/'.length)) }
+  try {
+    if (hash.startsWith('#/jobs/')) {
+      return { page: 'job', jobId: decodeURIComponent(hash.slice('#/jobs/'.length)) }
+    }
+    if (hash === '#/history') return { page: 'history' }
+    if (hash === '#/profile') return { page: 'profile' }
+    return { page: 'cockpit' }
+  } catch {
+    // Malformed percent-encoding in the hash (e.g. "#/jobs/%zz") throws a
+    // URIError from decodeURIComponent. This runs both during useState
+    // initialization and inside the hashchange listener, and this app has no
+    // ErrorBoundary, so an uncaught throw here would white-screen the whole
+    // page. Fall back to the default cockpit route instead of crashing.
+    return { page: 'cockpit' }
   }
-  if (hash === '#/history') return { page: 'history' }
-  if (hash === '#/profile') return { page: 'profile' }
-  return { page: 'cockpit' }
 }
 
 function apiUrl(url: string): string {
@@ -395,7 +404,13 @@ function App() {
     if (!window.location.hash) {
       window.location.hash = '#/cockpit'
     }
-    const onHashChange = () => setRoute(parseRoute())
+    const onHashChange = () => {
+      setRoute(parseRoute())
+      // An evidence dialog opened on the previous route must not stay pinned full-screen
+      // over whatever page the user navigated to (back/forward or a nav click while the
+      // dialog was open).
+      setActiveDiff(null)
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
