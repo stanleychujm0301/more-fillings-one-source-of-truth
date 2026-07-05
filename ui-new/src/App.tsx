@@ -299,8 +299,27 @@ function apiUrl(url: string): string {
   return `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
 }
 
+// Thrown by fetchJson when the browser's own `fetch` call rejects (backend unreachable,
+// DNS failure, offline, CORS preflight failure, etc.) rather than when the backend
+// responds with a non-2xx status. Callers use this to distinguish "network is down" from
+// a normal HTTP error so they can show a calmer, non-spammy connection indicator instead
+// of an error banner (see the job-detail polling loop and the api-status pill).
+class NetworkUnavailableError extends Error {}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiUrl(url), init)
+  let response: Response
+  try {
+    response = await fetch(apiUrl(url), init)
+  } catch (err) {
+    // The browser throws a plain TypeError ("Failed to fetch" / "NetworkError when
+    // attempting to fetch resource") when the request never reaches a server at all.
+    // Surfacing that raw English message directly to users is not useful; wrap it in a
+    // clear Chinese explanation instead.
+    if (err instanceof TypeError) {
+      throw new NetworkUnavailableError('后端连接中断，请检查网络或稍后重试。')
+    }
+    throw err
+  }
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`
     try {
@@ -342,6 +361,12 @@ function App() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [avatarVersion, setAvatarVersion] = useState(0)
+  // Drives the toolbar api-status pill. 'connecting' is the initial/never-succeeded
+  // state; 'disconnected' means a previously-working connection just failed (session
+  // bootstrap retry or job-detail polling hit a network error); 'connected' means the
+  // most recent relevant request succeeded.
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
+  const loadJobRequestRef = useRef(0)
 
   const userLabel = useMemo(() => {
     if (!session?.user) return DEFAULT_USER_LABEL
@@ -369,8 +394,21 @@ function App() {
   }, [])
 
   const loadJob = useCallback(async (jobId: string) => {
-    const payload = await fetchJson<JobDetail>(`/api/jobs/${encodeURIComponent(jobId)}`)
-    setJob(payload)
+    // Tag every call with an incrementing request id so a slow/late response from an
+    // abandoned request (user already navigated to a different job, or away from the job
+    // page entirely) can never clobber state with stale data — and so its eventual error
+    // (if any) is silently dropped instead of surfacing for a request nobody is waiting on
+    // anymore.
+    const requestId = ++loadJobRequestRef.current
+    try {
+      const payload = await fetchJson<JobDetail>(`/api/jobs/${encodeURIComponent(jobId)}`)
+      if (loadJobRequestRef.current !== requestId) return
+      setJob(payload)
+      setConnectionStatus('connected')
+    } catch (err) {
+      if (loadJobRequestRef.current !== requestId) return
+      throw err
+    }
   }, [])
 
   const fetchLatestCompletedJob = useCallback(async () => {
@@ -410,13 +448,41 @@ function App() {
       // over whatever page the user navigated to (back/forward or a nav click while the
       // dialog was open).
       setActiveDiff(null)
+      // A stale error/message banner from the page you're leaving (e.g. a failed history
+      // fetch) shouldn't keep floating at the top of whatever page you navigate to next.
+      setError(null)
+      setMessage(null)
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
   useEffect(() => {
-    loadSession().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+    let cancelled = false
+    let retryTimeoutId: number | null = null
+
+    const attempt = () => {
+      loadSession()
+        .then(() => {
+          if (!cancelled) setConnectionStatus('connected')
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          setConnectionStatus('disconnected')
+          setError(err instanceof Error ? err.message : String(err))
+          // The session request is how the app first learns whether the backend is
+          // reachable at all. Previously a failure here left the api-status pill stuck on
+          // "正在连接" forever with no way to recover short of a manual page reload; retry
+          // on a simple fixed interval until it succeeds.
+          retryTimeoutId = window.setTimeout(attempt, 5000)
+        })
+    }
+    attempt()
+
+    return () => {
+      cancelled = true
+      if (retryTimeoutId !== null) window.clearTimeout(retryTimeoutId)
+    }
   }, [loadSession])
 
   useEffect(() => {
@@ -462,10 +528,25 @@ function App() {
   useEffect(() => {
     if (route.page !== 'job' || !route.jobId || !shouldRefreshJob(job)) return
     const intervalId = window.setInterval(() => {
-      loadJob(route.jobId).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      loadJob(route.jobId).catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err)
+        if (/job not found|404/i.test(detail)) {
+          // The task was deleted / isn't in this environment's storage anymore — polling
+          // forever would just retry a request that can never succeed. Stop this interval
+          // and fall back to the same "missing job" recovery flow used for the initial load.
+          window.clearInterval(intervalId)
+          handleMissingJob(route.jobId || '', detail)
+          return
+        }
+        // Anything else here (backend unreachable, transient 5xx, etc.) used to call
+        // setError on every single poll — a fresh error popup every 2.5s for as long as
+        // the backend stayed down. Surface it via the shared connection-status pill
+        // instead and keep polling; the backend may recover on its own.
+        setConnectionStatus('disconnected')
+      })
     }, 2500)
     return () => window.clearInterval(intervalId)
-  }, [job?.status, loadJob, route.jobId, route.page])
+  }, [handleMissingJob, job?.status, loadJob, route.jobId, route.page])
 
   const clearValidationTimeout = useCallback(() => {
     if (validationTimeoutRef.current !== null) {
@@ -615,7 +696,9 @@ function App() {
               <small>{session?.user.role_title || 'Senior manager'}</small>
             </span>
           </a>
-          <span id="statusBadge" className="api-status">{session ? 'API 已连接' : '正在连接'}</span>
+          <span id="statusBadge" className={`api-status ${connectionStatus}`}>
+            {connectionStatus === 'connected' ? 'API 已连接' : connectionStatus === 'disconnected' ? '连接中断' : '正在连接'}
+          </span>
         </div>
       </header>
 

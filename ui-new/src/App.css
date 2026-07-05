@@ -3414,6 +3414,12 @@ html {
   background: rgba(224, 242, 254, 0.82);
 }
 
+.api-status.disconnected {
+  color: #9f1239;
+  border-color: rgba(190, 18, 60, 0.28);
+  background: rgba(254, 226, 226, 0.9);
+}
+
 .command-hero {
   padding: 30px 32px 24px;
   background:
