@@ -1345,7 +1345,7 @@ function JobDetailPage({
               {activeDiffs.length ? activeDiffs.map((diff) => {
                 const values = reviewValues(diff)
                 return (
-                  <article className="diff-source-row" key={diff.diff_id}>
+                  <article className="diff-source-row" id={`diff-row-${diff.diff_id}`} key={diff.diff_id}>
                     <div className="diff-source-row-main">
                       <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
                       <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
@@ -1418,7 +1418,7 @@ function BilingualPageReview({
           const zhPages = evidencePagesForSides(diff, ['A', 'H_ZH', 'ZH', 'H_CN'], values.aPage)
           const enPages = evidencePagesForSides(diff, ['H', 'H_EN', 'EN'], values.hPage)
           return (
-            <article className="bilingual-page-row" key={diff.diff_id}>
+            <article className="bilingual-page-row" id={`diff-row-${diff.diff_id}`} key={diff.diff_id}>
               <span className="row-index">{index + 1}</span>
               <strong>{localized(diff.topic)}</strong>
               <span>{zhPages}</span>
@@ -1642,6 +1642,29 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
   const chart = diff.chart_cross
   const labels = job ? sideLabelsForJob(job) : { a: 'A 股', h: 'H 股', factLabel: '画像事实' }
   const scope = normalizedDiffScope(diff)
+  const dialogRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    // Remember whatever triggered the dialog (the "查看证据" button) so focus can be
+    // returned to it once the dialog closes, instead of leaving focus lost on <body>.
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    dialogRef.current?.focus()
+
+    // Prevent the page underneath from scrolling while the full-screen dialog is open.
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      previouslyFocused?.focus()
+    }
+  }, [onClose])
   // internal 差异（a_internal/h_internal）比较的是同一份报告内部的"可见值"与"底层原值"
   // （见 text_overlay_tamper.py / key_metric_tamper.py 对 a_value/h_value 的复用），
   // 不是两份不同报告的对比，表头文案与配色都要按此区分，避免误导为跨报告差异。
@@ -1658,7 +1681,15 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
   const valueChipLabel = scope === 'a_internal' || scope === 'h_internal' ? '可见值/底层原值' : `${labels.a}/${labels.h} 取值`
   return (
     <div className="review-overlay" role="presentation" onClick={onClose}>
-      <section className="review-shell" role="dialog" aria-modal="true" aria-label="证据复核" onClick={(event) => event.stopPropagation()}>
+      <section
+        className="review-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-label="证据复核"
+        tabIndex={-1}
+        ref={dialogRef}
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="review-header">
           <div>
             <p className="review-eyebrow">证据复核 · {triageLabel(diff.triage)}</p>
@@ -1666,7 +1697,21 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
             <p>{diff.diff_id} · {evidencePages(diff, labels)} · {evidences.length} 条证据</p>
           </div>
           <div className="review-actions">
-            <button type="button" className="ghost" onClick={onClose}>定位列表</button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                const rowId = `diff-row-${diff.diff_id}`
+                onClose()
+                // Wait a tick for the dialog to unmount and body scroll to be restored
+                // before scrolling, so this doesn't fight the overflow:hidden lock above.
+                window.setTimeout(() => {
+                  document.getElementById(rowId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                }, 0)
+              }}
+            >
+              定位列表
+            </button>
             <button type="button" className="ghost" onClick={onClose}>关闭</button>
           </div>
         </header>
