@@ -123,7 +123,7 @@ def test_ui_new_surfaces_persisted_running_progress_summary():
 def test_ui_new_browser_title_uses_competition_project_name():
     source = UI_NEW_INDEX.read_text(encoding="utf-8")
 
-    assert "<title>more_fillings_one_source_of_truth</title>" in source
+    assert "<title>多重披露，一次核对 · A+H 披露一致性核查</title>" in source
     assert "<title>ui-new</title>" not in source
 
 
@@ -133,7 +133,10 @@ def test_ui_new_header_keeps_kpmg_logo_and_one_source_of_truth_tagline():
     assert "kpmg-logo" in source
     assert "Chu, Stanley (SH/FS3)" in source
     assert "多重披露，一次核对" in source
-    assert "MORE FILLINGS, ONE SOURCE OF TRUTH" in source
+    assert "MORE FILINGS, ONE SOURCE OF TRUTH" in source
+    # "FILLINGS" (double L) was a misspelling of "filings" (financial disclosure
+    # documents) — must not regress back into the source anywhere.
+    assert "MORE FILLINGS, ONE SOURCE OF TRUTH" not in source
 
 
 def test_ui_new_is_chinese_first_for_navigation_pages_and_statuses():

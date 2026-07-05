@@ -689,7 +689,7 @@ function App() {
           <img className="kpmg-logo" src={kpmgLogo} alt="KPMG" />
           <span className="brand-tagline">
             <span>多重披露，一次核对</span>
-            <strong>MORE FILLINGS, ONE SOURCE OF TRUTH</strong>
+            <strong>MORE FILINGS, ONE SOURCE OF TRUTH</strong>
           </span>
         </a>
         <nav className="nav" aria-label="主要导航">
