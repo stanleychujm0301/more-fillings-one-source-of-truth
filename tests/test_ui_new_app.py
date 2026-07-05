@@ -562,13 +562,19 @@ def test_ui_new_cockpit_aligns_recent_history_with_primary_actions():
     css = APP_CSS.read_text(encoding="utf-8")
 
     for token in (
-        "history.slice(0, 5)",
+        "RECENT_HISTORY_LIMIT",
+        "history.slice(0, RECENT_HISTORY_LIMIT)",
         "command-history-actions",
         "command-history-link primary",
         "查看全部项目历史",
         "开始核查",
     ):
         assert token in source
+
+    recent_limit_match = re.search(r"const RECENT_HISTORY_LIMIT = (\d+)", source)
+    assert recent_limit_match
+    assert recent_limit_match.group(1) == "8"
+    assert "history.slice(0, 5)" not in source
 
     for snippet in (
         ".command-main,\n.command-history",
@@ -691,6 +697,26 @@ def test_ui_new_job_detail_highlights_audit_profiles_and_dense_review_dashboard(
         assert f".{token}" in css
 
 
+def test_ui_new_job_detail_uses_unified_evidence_review_kpi_for_both_modes():
+    source = APP_TSX.read_text(encoding="utf-8")
+
+    for token in (
+        "reviewEvidenceMetric",
+        "reviewQueueCount",
+        "evidenceLocated",
+        "missingEvidence",
+        "证据审阅",
+        "真实 ${reviewMetric.real}",
+        "待复核 ${reviewMetric.unresolved}",
+        "已定位 ${reviewMetric.evidenceLocated}/${reviewMetric.totalDiff}",
+    ):
+        assert token in source
+
+    assert "job.check_mode === 'h_bilingual' ? (" not in source
+    assert 'label="核对覆盖"' not in source
+    assert 'label="疑似篡改识别"' not in source
+
+
 def test_ui_new_job_detail_removes_disclosure_coverage_from_review_queue():
     source = APP_TSX.read_text(encoding="utf-8")
     css = APP_CSS.read_text(encoding="utf-8")
@@ -749,14 +775,43 @@ def test_ui_new_job_detail_groups_diffs_by_triage_and_source_scope():
         ".diff-drilldown-board",
         ".diff-drilldown-grid",
         ".diff-drilldown-card",
+        ".diff-drilldown-card .diff-source-label",
+        ".diff-drilldown-card .diff-triage-label",
         ".diff-active-queue",
         ".diff-source-row",
     ):
         assert token in css
 
+    source_label = '<span className="diff-source-label">{sourceGroup.label}</span>'
+    count_label = "<strong>{count}</strong>"
+    triage_label = '<small className="diff-triage-label">{triageGroup.label}</small>'
+    assert source_label in source
+    assert triage_label in source
+    assert source.index(source_label) < source.index(count_label) < source.index(triage_label)
+
     assert "scopedDiffs.length ? scopedDiffs.map" not in source
     assert "diff-scope-rail" not in source
     assert ".diff-scope-rail" not in css
+
+
+def test_ui_new_h_bilingual_review_queue_only_shows_bilingual_cross_report_scope():
+    source = APP_TSX.read_text(encoding="utf-8")
+
+    for token in (
+        "diffSourceGroupsForJob(job)",
+        "job.check_mode === 'h_bilingual'",
+        "H中英文不一致",
+        "H中文报告与H英文报告之间的不一致差异",
+        "groupDiffsByTriageAndScope(diffs, job.check_mode)",
+        "if (checkMode === 'h_bilingual') return 'cross_report'",
+        "labelSideForJob(item.side, labels)",
+        "evidencePages(diff, labels)",
+        "evidenceCountBySide(diff, labels)",
+    ):
+        assert token in source
+
+    assert "H中文自身问题" not in source
+    assert "H英文自身问题" not in source
 
 
 def test_ui_new_job_detail_reframes_audit_title_and_uses_bilingual_page_review():
@@ -793,12 +848,15 @@ def test_ui_new_job_detail_topbar_uses_report_actions_instead_of_page_title():
     for token in (
         "job-report-actions",
         "job-report-action-link",
-        "下载 HTML 报告",
+        "下载 HTML",
+        "等待 HTML",
         "下载 PDF",
         "返回项目历史",
     ):
         assert token in source
 
+    assert "下载 HTML 报告" not in source
+    assert "等待 HTML 报告" not in source
     assert "route.page === 'job' ? (" in source
     assert "if (route.page === 'job') return '核查详情'" not in source
     assert "if (route.page === 'job') return '差异与证据复核'" not in source

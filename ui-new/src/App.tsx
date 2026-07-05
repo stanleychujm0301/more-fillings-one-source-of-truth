@@ -34,6 +34,7 @@ type HealthPayload = {
 }
 
 const JOB_REFRESH_STATUSES = new Set(['pending', 'parsing', 'profiling', 'checking', 'reporting'])
+const RECENT_HISTORY_LIMIT = 8
 
 type JobSummary = {
   job_id: string
@@ -382,6 +383,12 @@ function sideLabel(side?: string | null): string {
   return side || '证据'
 }
 
+function labelSideForJob(side: string | null | undefined, labels: SideDisplayLabels): string {
+  if (side === 'A' || side === 'H_ZH' || side === 'ZH' || side === 'H_CN') return labels.a
+  if (side === 'H' || side === 'H_EN' || side === 'EN') return labels.h
+  return sideLabel(side)
+}
+
 function valueText(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'number') {
@@ -412,10 +419,10 @@ function bboxText(bbox?: [number, number, number, number] | null): string {
   return bbox.map((value) => Number(value).toFixed(1)).join(', ')
 }
 
-function evidencePages(diff: DiffItem): string {
+function evidencePages(diff: DiffItem, labels?: SideDisplayLabels): string {
   const pages = (diff.evidence || [])
     .filter((item) => item.page)
-    .map((item) => `${sideLabel(item.side)} p${item.page}`)
+    .map((item) => `${labels ? labelSideForJob(item.side, labels) : sideLabel(item.side)} p${item.page}`)
   return pages.length ? pages.join(' · ') : '—'
 }
 
@@ -429,14 +436,14 @@ function evidencePagesForSides(diff: DiffItem, sides: string[], fallbackPage?: n
   return pages.size ? Array.from(pages).sort((a, b) => a - b).map((page) => `p${page}`).join(' / ') : '—'
 }
 
-function evidenceCountBySide(diff: DiffItem): string {
+function evidenceCountBySide(diff: DiffItem, labels?: SideDisplayLabels): string {
   const counts = (diff.evidence || []).reduce<Record<string, number>>((acc, item) => {
-    const key = sideLabel(item.side)
+    const key = labels ? labelSideForJob(item.side, labels) : sideLabel(item.side)
     acc[key] = (acc[key] || 0) + 1
     return acc
   }, {})
   const parts = Object.entries(counts).map(([side, count]) => `${side} ${count}`)
-  return parts.length ? parts.join(' / ') : 'A 0 / H 0'
+  return parts.length ? parts.join(' / ') : `${labels?.a || 'A'} 0 / ${labels?.h || 'H'} 0`
 }
 
 function reviewValues(diff: DiffItem) {
@@ -454,6 +461,8 @@ function reviewValues(diff: DiffItem) {
 
 type DiffTriageScope = 'real' | 'unresolved' | 'expected'
 type DiffSourceScope = 'cross_report' | 'a_internal' | 'h_internal'
+type CheckMode = JobSummary['check_mode']
+type SideDisplayLabels = { a: string; h: string; factLabel: string }
 
 const DIFF_TRIAGE_GROUPS: Array<{ key: DiffTriageScope; label: string; tone: string }> = [
   { key: 'real', label: '真实差异', tone: 'critical' },
@@ -467,13 +476,27 @@ const DIFF_SOURCE_GROUPS: Array<{ key: DiffSourceScope; label: string; descripti
   { key: 'h_internal', label: 'H股自身问题', description: 'H股报告自身存在的差异问题' },
 ]
 
+function diffSourceGroupsForJob(job: JobDetail): Array<{ key: DiffSourceScope; label: string; description: string }> {
+  if (job.check_mode === 'h_bilingual') {
+    return [
+      {
+        key: 'cross_report',
+        label: 'H中英文不一致',
+        description: 'H中文报告与H英文报告之间的不一致差异',
+      },
+    ]
+  }
+  return DIFF_SOURCE_GROUPS
+}
+
 function normalizedTriageScope(diff: DiffItem): DiffTriageScope {
   if (diff.triage === 'expected') return 'expected'
   if (diff.triage === 'unresolved') return 'unresolved'
   return 'real'
 }
 
-function normalizedDiffScope(diff: DiffItem): DiffSourceScope {
+function normalizedDiffScope(diff: DiffItem, checkMode?: CheckMode): DiffSourceScope {
+  if (checkMode === 'h_bilingual') return 'cross_report'
   if (diff.diff_scope === 'a_internal' || diff.diff_scope === 'h_internal') {
     return diff.diff_scope
   }
@@ -496,10 +519,10 @@ function emptyDiffGroups(): Record<DiffTriageScope, Record<DiffSourceScope, Diff
   }, {} as Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>>)
 }
 
-function groupDiffsByTriageAndScope(diffs: DiffItem[]): Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>> {
+function groupDiffsByTriageAndScope(diffs: DiffItem[], checkMode?: CheckMode): Record<DiffTriageScope, Record<DiffSourceScope, DiffItem[]>> {
   const groups = emptyDiffGroups()
   diffs.forEach((diff) => {
-    groups[normalizedTriageScope(diff)][normalizedDiffScope(diff)].push(diff)
+    groups[normalizedTriageScope(diff)][normalizedDiffScope(diff, checkMode)].push(diff)
   })
   return groups
 }
@@ -515,7 +538,7 @@ function formatDuration(seconds?: number | null): string {
   return minutes ? `${minutes}分${rest}秒` : `${rest}秒`
 }
 
-function sideLabelsForJob(job: JobDetail): { a: string; h: string; factLabel: string } {
+function sideLabelsForJob(job: JobDetail): SideDisplayLabels {
   const rawLabels = job.comparison_summary?.side_labels
   const labels = rawLabels && typeof rawLabels === 'object' ? rawLabels as Record<string, unknown> : {}
   const a = String(labels.A || (job.check_mode === 'h_bilingual' ? 'H中文' : 'A 股'))
@@ -604,6 +627,17 @@ function auditConclusion(job: JobDetail, diffs: DiffItem[]) {
     blocking,
     auxiliary,
   }
+}
+
+function reviewEvidenceMetric(summary: Record<string, unknown>, diffs: DiffItem[]) {
+  const real = summaryNumber(summary, 'real_diff_count')
+  const unresolved = summaryNumber(summary, 'unresolved_diff_count')
+  const reviewQueueCount = real + unresolved
+  const evidenceLocated = diffs.filter((diff) => (diff.evidence || []).length > 0).length
+  const totalDiff = summaryNumber(summary, 'total_diff_count') || diffs.length
+  const missingEvidence = Math.max(totalDiff - evidenceLocated, 0)
+  const tone: 'critical' | 'warning' | 'teal' = real ? 'critical' : unresolved ? 'warning' : 'teal'
+  return { real, unresolved, reviewQueueCount, evidenceLocated, totalDiff, missingEvidence, tone }
 }
 
 function shouldRefreshJob(job: JobDetail | null): boolean {
@@ -1073,7 +1107,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   if (!job) {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML 报告</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML</span>
         <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
@@ -1082,7 +1116,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   if (job.status !== 'done') {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">等待 HTML 报告</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">等待 HTML</span>
         <span className="job-report-action-link disabled" aria-disabled="true">等待 PDF</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
@@ -1090,7 +1124,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   }
   return (
     <div className="job-report-actions" aria-label="报告操作">
-      <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}>下载 HTML 报告</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}>下载 HTML</a>
       <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}>下载 PDF</a>
       <a className="job-report-action-link" href="#/history">返回项目历史</a>
     </div>
@@ -1159,7 +1193,7 @@ function CockpitPage({
   clearUploadError: (field: UploadErrorField) => void
   submitJob: (event: FormEvent<HTMLFormElement>) => void
 }) {
-  const latest = history.slice(0, 5)
+  const latest = history.slice(0, RECENT_HISTORY_LIMIT)
   const companyInputRef = useRef<HTMLInputElement>(null)
   const aFileInputRef = useRef<HTMLInputElement>(null)
   const hFileInputRef = useRef<HTMLInputElement>(null)
@@ -1484,10 +1518,13 @@ function JobDetailPage({
   const diffs = job.diffs || []
   const labels = sideLabelsForJob(job)
   const conclusion = auditConclusion(job, diffs)
-  const diffGroups = groupDiffsByTriageAndScope(diffs)
+  const sourceGroups = diffSourceGroupsForJob(job)
+  const activeSource = sourceGroups.some((item) => item.key === selectedSource) ? selectedSource : sourceGroups[0].key
+  const diffGroups = groupDiffsByTriageAndScope(diffs, job.check_mode)
+  const reviewMetric = reviewEvidenceMetric(summary, diffs)
   const selectedTriageGroup = DIFF_TRIAGE_GROUPS.find((item) => item.key === selectedTriage) || DIFF_TRIAGE_GROUPS[0]
-  const selectedSourceGroup = DIFF_SOURCE_GROUPS.find((item) => item.key === selectedSource) || DIFF_SOURCE_GROUPS[0]
-  const activeDiffs = diffGroups[selectedTriage][selectedSource]
+  const selectedSourceGroup = sourceGroups.find((item) => item.key === activeSource) || sourceGroups[0]
+  const activeDiffs = diffGroups[selectedTriage][activeSource]
   return (
     <section className="stack detail-dashboard">
       <div className={`audit-conclusion-strip ${conclusion.tone}`}>
@@ -1553,10 +1590,10 @@ function JobDetailPage({
           note={`证据定位 ${conclusion.evidenceItems} · 总差异 ${metric(summary, 'total_diff_count')}`}
         />
         <DashboardMetric
-          tone={(summaryNumber(summary, 'text_overlay_tamper_count') || summaryNumber(summary, 'visual_text_layer_mismatch_count')) ? 'critical' : undefined}
-          label="疑似篡改识别"
-          value={`${metric(summary, 'text_overlay_tamper_count')} / ${metric(summary, 'visual_text_layer_mismatch_count')}`}
-          note={`叠加检测 / 视觉复核 · 关键指标精确差异 ${metric(summary, 'key_metric_exact_diff_count')}`}
+          tone={reviewMetric.tone}
+          label="证据审阅"
+          value={`${reviewMetric.reviewQueueCount} 项`}
+          note={`真实 ${reviewMetric.real} · 待复核 ${reviewMetric.unresolved} · 已定位 ${reviewMetric.evidenceLocated}/${reviewMetric.totalDiff}`}
         />
       </div>
 
@@ -1587,9 +1624,9 @@ function JobDetailPage({
         <div className="diff-drilldown-board">
           <div className="diff-drilldown-grid" aria-label="差异分类选择">
             {DIFF_TRIAGE_GROUPS.map((triageGroup) => (
-              DIFF_SOURCE_GROUPS.map((sourceGroup) => {
+              sourceGroups.map((sourceGroup) => {
                 const count = diffGroups[triageGroup.key][sourceGroup.key].length
-                const selected = selectedTriage === triageGroup.key && selectedSource === sourceGroup.key
+                const selected = selectedTriage === triageGroup.key && activeSource === sourceGroup.key
                 return (
                   <button
                     key={`${triageGroup.key}-${sourceGroup.key}`}
@@ -1601,9 +1638,9 @@ function JobDetailPage({
                       setSelectedSource(sourceGroup.key)
                     }}
                   >
-                    <span>{triageGroup.label}</span>
+                    <span className="diff-source-label">{sourceGroup.label}</span>
                     <strong>{count}</strong>
-                    <small>{sourceGroup.label}</small>
+                    <small className="diff-triage-label">{triageGroup.label}</small>
                   </button>
                 )
               })
@@ -1629,7 +1666,7 @@ function JobDetailPage({
                       <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
                       <strong>{diff.diff_explanation?.headline || localized(diff.topic)}</strong>
                       <p>{diff.diff_explanation?.issue || localized(diff.summary)}</p>
-                      <small>规则 ID {diff.rule_id || '—'} · {evidencePages(diff)}</small>
+                      <small>规则 ID {diff.rule_id || '—'} · {evidencePages(diff, labels)}</small>
                     </div>
                     <div className="diff-source-row-meta">
                       <span>{valueText(values.aValue)}</span>
@@ -1941,7 +1978,7 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
           <div>
             <p className="review-eyebrow">证据复核 · {triageLabel(diff.triage)}</p>
             <h2>{explanation?.headline || localized(diff.topic)}</h2>
-            <p>{diff.diff_id} · {evidencePages(diff)} · {evidences.length} 条证据</p>
+            <p>{diff.diff_id} · {evidencePages(diff, labels)} · {evidences.length} 条证据</p>
           </div>
           <div className="review-actions">
             <button type="button" className="ghost" onClick={onClose}>定位列表</button>
@@ -1961,13 +1998,13 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
           <aside className="review-panel">
             <div className="review-panel-head">
               <span>证据链</span>
-              <span>{evidenceCountBySide(diff)}</span>
+              <span>{evidenceCountBySide(diff, labels)}</span>
             </div>
             <div className="review-chain">
               {evidences.length ? evidences.map((item, index) => (
                 <article key={`${diff.diff_id}-${index}`} className={`review-evidence-card ${item.side === 'H' ? 'h-side' : 'a-side'}`}>
                   <div className="review-evidence-top">
-                    <span>{sideLabel(item.side)}</span>
+                    <span>{labelSideForJob(item.side, labels)}</span>
                     <strong>第 {item.page || '-'} 页</strong>
                   </div>
                   <small>{item.section || '章节待确认'} · bbox {bboxText(item.bbox)}</small>
@@ -2031,7 +2068,7 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
               <div className="review-meta-item"><span>规则 ID</span><strong>{diff.rule_id || '—'}</strong></div>
               <div className="review-meta-item"><span>审阅状态</span><strong>{diff.review_status || 'pending'}</strong></div>
               <div className="review-meta-item"><span>审阅提示</span><strong>{explanation?.review_hint || '—'}</strong></div>
-              <div className="review-meta-item"><span>位置</span><strong>{explanation?.location || evidencePages(diff)}</strong></div>
+              <div className="review-meta-item"><span>位置</span><strong>{explanation?.location || evidencePages(diff, labels)}</strong></div>
               <div className="review-meta-item"><span>类型</span><strong>{diffTypeLabel(diff.diff_type)}</strong></div>
             </div>
 

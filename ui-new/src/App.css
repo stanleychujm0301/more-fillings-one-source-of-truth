@@ -3090,10 +3090,11 @@ body {
   transform: translateY(-1px);
 }
 
-.diff-drilldown-card span {
+.diff-drilldown-card .diff-source-label {
   color: #00338d;
   font-size: 11px;
   font-weight: 840;
+  line-height: 1.25;
 }
 
 .diff-drilldown-card strong {
@@ -3102,7 +3103,7 @@ body {
   line-height: 1;
 }
 
-.diff-drilldown-card small {
+.diff-drilldown-card .diff-triage-label {
   color: #667085;
   font-size: 11px;
   line-height: 1.35;
