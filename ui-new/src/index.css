@@ -1,18 +1,45 @@
 :root {
-  --bg: #edf0f5;
-  --surface: #ffffff;
-  --surface-soft: #f7faff;
+  /* Design tokens — "precision audit instrument": Apple-like restraint (whitespace,
+     tight tracking, glass) crossed with financial-terminal authority (deep navy anchor,
+     tabular data, a single light theme). See project instructions for the full spec. */
+  --bg: #f4f6fa;
+  --navy: #00338d;
+  --navy-deep: #001b54;
+  --cobalt: #1e49e2;
+  --cyan: #00a3e0;
   --ink: #0d1520;
   --muted: #667085;
-  --line: rgba(18, 38, 63, 0.12);
-  --kpmg-blue: #00338d;
-  --kpmg-deep: #001b54;
-  --cyan: #00a3e0;
-  --green: #16a34a;
-  --amber: #b7791f;
-  --red: #c2410c;
-  --shadow: 0 14px 44px rgba(16, 34, 71, 0.1);
-  --font: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --hairline: rgba(13, 32, 63, 0.10);
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #dc2626;
+  --surface: #ffffff;
+  --surface-soft: #f7faff;
+
+  /* Backward-compat aliases: App.css still references these older names in dozens of
+     places. Keeping them pointed at the new tokens means the redesign doesn't require a
+     single big-bang rewrite of every selector at once. */
+  --kpmg-blue: var(--navy);
+  --kpmg-deep: var(--navy-deep);
+  --line: var(--hairline);
+  --green: var(--success);
+  --amber: var(--warning);
+  --red: var(--danger);
+
+  /* Shape */
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  /* Shadow — two decks replace the previous scattering of ad-hoc box-shadow values. */
+  --shadow-rest: 0 1px 2px rgba(13, 32, 63, 0.05), 0 8px 24px rgba(13, 32, 63, 0.06);
+  --shadow-float: 0 24px 64px rgba(13, 32, 63, 0.18);
+  --shadow: var(--shadow-rest);
+  --soft-shadow: var(--shadow-rest);
+  --floating-shadow: var(--shadow-float);
+  --surface-shadow: var(--shadow-rest);
+
+  --font: "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
   color-scheme: light;
 
   font-family: var(--font);
@@ -22,6 +49,9 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* KPI figures, percentages, dates, amounts, page/sequence numbers all benefit from
+     fixed-width digits; harmless on non-numeric text. */
+  font-variant-numeric: tabular-nums;
 }
 
 * {

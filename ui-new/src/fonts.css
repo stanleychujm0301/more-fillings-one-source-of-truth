@@ -1,0 +1,10 @@
+/* Self-hosted variable font: Schibsted Grotesk (OFL, see assets/fonts/SchibstedGrotesk-OFL.txt).
+   Latin-only subset — Chinese text automatically falls back to the system font stack
+   declared in --font (index.css), since this subset carries no CJK glyphs. */
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  src: url('./assets/fonts/SchibstedGrotesk-Latin.woff2') format('woff2-variations'), url('./assets/fonts/SchibstedGrotesk-Latin.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
