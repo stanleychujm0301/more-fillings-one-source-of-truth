@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -37,6 +39,12 @@ from ahcc.storage.repository import (
 
 router = APIRouter()
 
+# CPython's event loop only holds a *weak* reference to scheduled tasks; without an
+# external strong reference, a fire-and-forget task can be garbage-collected before it
+# completes, silently killing an in-flight job. Keep every scheduled background job task
+# alive here until it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
 _NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -44,10 +52,15 @@ _NO_CACHE_HEADERS = {
 }
 
 
+_HISTORY_LIMIT_MIN = 1
+_HISTORY_LIMIT_MAX = 100
+
+
 @router.get("/history")
 def list_jobs_endpoint(limit: int = 10, scope: str = "project") -> list[dict]:
     """列出历史核查任务。"""
-    return list_jobs(limit, scope=scope)
+    clamped_limit = max(_HISTORY_LIMIT_MIN, min(_HISTORY_LIMIT_MAX, limit))
+    return list_jobs(clamped_limit, scope=scope)
 
 
 @router.post("/", response_model=Job)
@@ -101,7 +114,7 @@ async def create_job(
     save_job(job)
     from ahcc.api.job_runner import run_job  # 延迟导入避免循环
 
-    asyncio.create_task(
+    _schedule_background_job(
         run_job(
             job,
             bilingual_level=normalized_bilingual_level,
@@ -109,6 +122,20 @@ async def create_job(
         )
     )
     return job
+
+
+def _schedule_background_job(coro) -> asyncio.Task:
+    """Schedule a fire-and-forget coroutine while holding a strong reference to the task.
+
+    See the `_BACKGROUND_TASKS` comment above for why this is necessary.
+    """
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    # 部分测试会全局 monkeypatch asyncio.create_task 并返回一个不支持
+    # add_done_callback 的桩对象，容错处理，避免破坏这些测试。
+    if hasattr(task, "add_done_callback"):
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
 
 
 async def _run_job_background(
@@ -239,7 +266,10 @@ def _regenerate_report(job_id: str, report_name: str, exporter) -> Path:
         exporter(job, temp_path)
         if not temp_path.is_file():
             raise RuntimeError(f"{report_name} exporter did not create a file")
-        shutil.copyfile(temp_path, target)
+        # os.replace is an atomic rename on the same filesystem — shutil.copyfile first
+        # truncates the destination then streams bytes in, so a concurrent download that is
+        # mid-read via FileResponse could observe a corrupted, partially-overwritten file.
+        os.replace(temp_path, target)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -267,8 +297,27 @@ def _remove_temp_report(path: Path) -> None:
 # 模块级别名，保留为可 monkeypatch 的钩子（测试用假文档替身，避免真实解析 PDF）。
 _load_branch_repair_doc = load_branch_lightweight_doc
 
+# GET /{job_id} 与 GET /{job_id}/diffs 都会调用 _repair_branch_diffs_if_needed，前端每 2.5
+# 秒轮询详情页，可能在修复完成前并发触发多次重复解析（每次同步解析两份源 PDF，耗时数秒）。
+# 用 job_id 级别的 in-flight 去重锁避免并发重复解析：已在处理的 job_id 直接跳过本次修复，
+# 不阻塞主流程，调用方照常走正常读取逻辑。
+_REPAIR_IN_PROGRESS: set[str] = set()
+_REPAIR_LOCK = threading.Lock()
+
 
 def _repair_branch_diffs_if_needed(job_id: str) -> bool:
+    with _REPAIR_LOCK:
+        if job_id in _REPAIR_IN_PROGRESS:
+            return False
+        _REPAIR_IN_PROGRESS.add(job_id)
+    try:
+        return _repair_branch_diffs_if_needed_locked(job_id)
+    finally:
+        with _REPAIR_LOCK:
+            _REPAIR_IN_PROGRESS.discard(job_id)
+
+
+def _repair_branch_diffs_if_needed_locked(job_id: str) -> bool:
     job_meta = get_job(job_id)
     if not job_meta:
         return False

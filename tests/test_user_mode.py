@@ -100,6 +100,63 @@ def test_get_conn_tolerates_locked_schema_check(monkeypatch, workspace_tmp):
     assert fake.closed is True
 
 
+def test_get_conn_only_bootstraps_schema_once_per_db_path(monkeypatch, workspace_tmp):
+    """B6: get_conn() used to run the full write-heavy _ensure_schema bootstrap
+    (executescript + INSERT + UPDATE + commit) on every single connection, even pure reads —
+    amplifying lock contention under concurrency. It should only run once per resolved db path,
+    and only be memoized after a successful run."""
+    db_path = workspace_tmp / "memoize.db"
+    monkeypatch.setattr(models, "_active_sqlite_path", lambda: db_path)
+    models._ensured_paths.discard(str(db_path.resolve()))
+
+    calls: list[int] = []
+    real_ensure_schema = models._ensure_schema
+
+    def spy_ensure_schema(conn):
+        calls.append(1)
+        return real_ensure_schema(conn)
+
+    monkeypatch.setattr(models, "_ensure_schema", spy_ensure_schema)
+
+    with models.get_conn():
+        pass
+    with models.get_conn():
+        pass
+    with models.get_conn():
+        pass
+
+    assert len(calls) == 1
+
+
+def test_get_conn_retries_schema_bootstrap_after_a_failed_attempt(monkeypatch, workspace_tmp):
+    """A failed ensure (e.g. transient 'database is locked') must not be memoized, so the
+    next connection can retry — this is the existing tolerate-locked-db behaviour and must
+    not regress once bootstrap results are cached."""
+    db_path = workspace_tmp / "retry.db"
+    monkeypatch.setattr(models, "_active_sqlite_path", lambda: db_path)
+    models._ensured_paths.discard(str(db_path.resolve()))
+
+    calls: list[int] = []
+    real_ensure_schema = models._ensure_schema
+
+    def flaky_ensure_schema(conn):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_ensure_schema(conn)
+
+    monkeypatch.setattr(models, "_ensure_schema", flaky_ensure_schema)
+
+    with models.get_conn():
+        pass
+    with models.get_conn():
+        pass
+    with models.get_conn():
+        pass
+
+    assert len(calls) == 2
+
+
 def test_session_current_and_profile_update(monkeypatch, workspace_tmp):
     _use_temp_db(monkeypatch, workspace_tmp)
 

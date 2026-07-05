@@ -72,6 +72,44 @@ def test_pdf_download_regenerates_with_current_exporter_and_disables_cache(monke
     assert response.headers["expires"] == "0"
 
 
+def test_report_regeneration_publishes_via_atomic_replace_not_copy(monkeypatch, workspace_tmp):
+    """B3: publishing the regenerated report must be an atomic rename (os.replace), not
+    shutil.copyfile — copyfile truncates the destination before writing, so a concurrent
+    download streaming the old file mid-copy would read a corrupted, partially-overwritten
+    file. os.replace is atomic on the same filesystem."""
+    job_id = "j-download"
+    report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
+    old_path = report_dir / "report.pdf"
+    old_path.write_bytes(b"old-pdf")
+
+    def fake_export_pdf(job, out_path):
+        Path(out_path).write_bytes(b"latest-pdf")
+
+    monkeypatch.setattr(routes_job, "export_pdf", fake_export_pdf, raising=False)
+
+    def boom_copyfile(*args, **kwargs):
+        raise AssertionError("shutil.copyfile must not be used to publish reports; use os.replace")
+
+    monkeypatch.setattr(routes_job.shutil, "copyfile", boom_copyfile)
+
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = routes_job.os.replace
+
+    def spy_replace(src, dst):
+        replace_calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(routes_job.os, "replace", spy_replace)
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/{job_id}/report.pdf?template=latest")
+
+    assert response.status_code == 200
+    assert response.content == b"latest-pdf"
+    assert old_path.read_bytes() == b"latest-pdf"
+    assert replace_calls, "expected os.replace to publish the regenerated report atomically"
+
+
 def test_excel_download_regenerates_with_current_exporter_and_disables_cache(monkeypatch, workspace_tmp):
     job_id = "j-download"
     report_dir = _patch_report_job(monkeypatch, workspace_tmp, job_id)
@@ -223,6 +261,35 @@ def test_pdf_download_repairs_stored_branch_diffs_before_export(monkeypatch, wor
     assert response.status_code == 200
     assert response.content == b"branch=1"
     assert saved[-1].comparison_summary["branch_diff_count"] == 1
+
+
+def test_repair_branch_diffs_skips_when_already_in_progress(monkeypatch):
+    """B8: GET /{job_id} and GET /{job_id}/diffs both call _repair_branch_diffs_if_needed,
+    and the UI polls the detail page every 2.5s — concurrent requests could trigger the same
+    (multi-second) source PDF re-parse repeatedly. If a repair for this job_id is already
+    in-flight, a second call must return immediately without touching get_job at all."""
+    calls: list[str] = []
+    monkeypatch.setattr(routes_job, "get_job", lambda job_id: calls.append(job_id) or None)
+
+    routes_job._REPAIR_IN_PROGRESS.add("job-x")
+    try:
+        result = routes_job._repair_branch_diffs_if_needed("job-x")
+    finally:
+        routes_job._REPAIR_IN_PROGRESS.discard("job-x")
+
+    assert result is False
+    assert calls == []
+
+
+def test_repair_branch_diffs_releases_in_progress_marker_after_run(monkeypatch):
+    """The in-flight marker must be released once the repair attempt finishes (success,
+    no-op, or failure), so a later poll can retry."""
+    monkeypatch.setattr(routes_job, "get_job", lambda job_id: None)
+
+    result = routes_job._repair_branch_diffs_if_needed("job-y")
+
+    assert result is False
+    assert "job-y" not in routes_job._REPAIR_IN_PROGRESS
 
 
 def _branch_repair_source_files(workspace_tmp: Path) -> tuple[Path, Path]:

@@ -196,6 +196,62 @@ def test_create_job_returns_pending_job_and_schedules_background_run(monkeypatch
     assert scheduled
 
 
+@pytest.mark.asyncio
+async def test_schedule_background_job_holds_strong_reference_until_done():
+    """B4: CPython's event loop only keeps a weak reference to scheduled tasks; without an
+    external strong reference the task object can be garbage-collected before it completes,
+    silently killing the job. create_job schedules run_job() through this helper, which must
+    keep the task alive in _BACKGROUND_TASKS until it finishes."""
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def _slow() -> None:
+        started.set()
+        await finished.wait()
+
+    task = routes_job._schedule_background_job(_slow())
+    try:
+        await started.wait()
+        assert task in routes_job._BACKGROUND_TASKS
+
+        finished.set()
+        await task
+        await asyncio.sleep(0)
+        assert task not in routes_job._BACKGROUND_TASKS
+    finally:
+        routes_job._BACKGROUND_TASKS.discard(task)
+
+
+@pytest.mark.parametrize(
+    "requested_limit,expected_limit",
+    [
+        (-1, 1),
+        (0, 1),
+        (10, 10),
+        (100, 100),
+        (10000, 100),
+        (999999, 100),
+    ],
+)
+def test_list_jobs_endpoint_clamps_limit(monkeypatch, requested_limit, expected_limit):
+    """B12: /api/jobs/history's `limit` query param wasn't clamped — limit=-1 (SQLite treats
+    a negative LIMIT as unbounded) or limit=999999 could return the entire table. Clamp to
+    [1, 100]."""
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(
+        routes_job,
+        "list_jobs",
+        lambda limit, scope="project": captured.update(limit=limit, scope=scope) or [],
+    )
+
+    with TestClient(api_main.app) as client:
+        response = client.get(f"/api/jobs/history?limit={requested_limit}")
+
+    assert response.status_code == 200
+    assert captured["limit"] == expected_limit
+
+
 def test_repository_marks_stale_running_jobs_failed(monkeypatch, workspace_tmp):
     _use_temp_db(monkeypatch, workspace_tmp)
     now = datetime(2026, 7, 1, 12, 30, 0)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -198,17 +199,37 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_project_group ON jobs(project_group_id)")
 
 
+# get_conn() used to run the full write-heavy _ensure_schema bootstrap (executescript +
+# INSERT + UPDATE + commit) on *every* connection, even pure reads — under concurrency this
+# opens an unnecessary write transaction per request and amplifies lock contention. Memoize
+# by resolved db path so it only runs once per process per path; a failed attempt (e.g.
+# transient "database is locked") is not memoized, so the next connection retries.
+_ensured_paths: set[str] = set()
+_ensured_paths_lock = threading.Lock()
+
+
+def _ensure_schema_once(conn: sqlite3.Connection, db_path: Path) -> None:
+    key = str(db_path.resolve())
+    with _ensured_paths_lock:
+        if key in _ensured_paths:
+            return
+    try:
+        _ensure_schema(conn)
+    except sqlite3.OperationalError as exc:
+        if not _is_database_locked(exc):
+            raise
+        return
+    with _ensured_paths_lock:
+        _ensured_paths.add(key)
+
+
 @contextmanager
 def get_conn():
     db_path = _active_sqlite_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect_sqlite(db_path)
     try:
-        try:
-            _ensure_schema(conn)
-        except sqlite3.OperationalError as exc:
-            if not _is_database_locked(exc):
-                raise
+        _ensure_schema_once(conn, db_path)
         yield conn
     finally:
         conn.close()

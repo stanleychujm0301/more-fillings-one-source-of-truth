@@ -153,8 +153,15 @@ def health() -> dict:
 
 
 def _ocr_health() -> dict:
+    # 只探测包是否*可安装/已安装*（importlib.util.find_spec 不会真正执行模块代码），
+    # 不 import ahcc.parser.ocr_fallback —— 该模块在导入期会直接 `import easyocr` /
+    # `from paddleocr import PaddleOCR`，第一次调用 /health 就会付出数秒 import 开销和
+    # 数百 MB 内存。变量名保持 _PADDLEOCR_AVAILABLE / _EASYOCR_AVAILABLE 不变。
+    import importlib.util
+
     try:
-        from ahcc.parser.ocr_fallback import _EASYOCR_AVAILABLE, _PADDLEOCR_AVAILABLE
+        _PADDLEOCR_AVAILABLE = importlib.util.find_spec("paddleocr") is not None
+        _EASYOCR_AVAILABLE = importlib.util.find_spec("easyocr") is not None
     except Exception:  # pragma: no cover
         return {
             "ocr_engine_available": False,
