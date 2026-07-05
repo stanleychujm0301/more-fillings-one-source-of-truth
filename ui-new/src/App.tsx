@@ -314,8 +314,8 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-function reportUrl(jobId: string, extension: 'pdf' | 'html'): string {
-  return apiUrl(`/api/jobs/${encodeURIComponent(jobId)}/report.${extension}?template=latest`)
+function reportUrl(jobId: string, extension: 'pdf' | 'html' | 'xlsx'): string {
+  return apiUrl(`/api/jobs/${encodeURIComponent(jobId)}/report.${extension}`)
 }
 
 function App() {
@@ -708,6 +708,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
       <div className="job-report-actions" aria-label="报告操作">
         <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML</span>
         <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">下载 Excel</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
     )
@@ -717,6 +718,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
       <div className="job-report-actions" aria-label="报告操作">
         <span className="job-report-action-link disabled" aria-disabled="true">等待 HTML</span>
         <span className="job-report-action-link disabled" aria-disabled="true">等待 PDF</span>
+        <span className="job-report-action-link disabled" aria-disabled="true">等待 Excel</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
     )
@@ -725,6 +727,7 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
     <div className="job-report-actions" aria-label="报告操作">
       <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}>下载 HTML</a>
       <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}>下载 PDF</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'xlsx')} download={`AHCC-${job.job_id}.xlsx`}>下载 Excel</a>
       <a className="job-report-action-link" href="#/history">返回项目历史</a>
     </div>
   )

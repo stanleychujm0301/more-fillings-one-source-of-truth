@@ -895,10 +895,17 @@ def test_ui_new_job_detail_topbar_uses_report_actions_instead_of_page_title():
 def test_ui_new_download_links_bust_browser_cache_for_latest_reports():
     source = APP_TSX.read_text(encoding="utf-8")
 
-    assert "function reportUrl(jobId: string, extension: 'pdf' | 'html')" in source
-    assert "report.${extension}?template=latest" in source
+    # reportUrl supports pdf/html/xlsx; the ?template=latest query param used to be
+    # appended to every report URL but the backend never read it (cache-busting is
+    # actually done server-side via no-store response headers), so it was dead weight
+    # and has been removed.
+    assert "function reportUrl(jobId: string, extension: 'pdf' | 'html' | 'xlsx')" in source
+    assert "report.${extension}?template=latest" not in source
+    assert "report.${extension}`)" in source
     assert "reportUrl(job.job_id, 'html')" in source
     assert "reportUrl(job.job_id, 'pdf')" in source
+    assert "reportUrl(job.job_id, 'xlsx')" in source
+    assert "下载 Excel" in source
 
 
 def test_ui_new_is_served_from_root_and_app_routes():
