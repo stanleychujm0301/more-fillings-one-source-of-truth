@@ -531,15 +531,20 @@ function App() {
 
   useEffect(() => {
     if (route.page !== 'job' || !route.jobId || !shouldRefreshJob(job)) return
+    // `route.jobId` is narrowed to `string` by the guard above, but that narrowing of a
+    // property access doesn't survive into the nested setInterval closure below (a fresh
+    // render could in principle produce a different `route` by the time the closure runs).
+    // Capture it in a local const once so the closure gets a plain `string`.
+    const jobId = route.jobId
     const intervalId = window.setInterval(() => {
-      loadJob(route.jobId).catch((err: unknown) => {
+      loadJob(jobId).catch((err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err)
         if (/job not found|404/i.test(detail)) {
           // The task was deleted / isn't in this environment's storage anymore — polling
           // forever would just retry a request that can never succeed. Stop this interval
           // and fall back to the same "missing job" recovery flow used for the initial load.
           window.clearInterval(intervalId)
-          handleMissingJob(route.jobId || '', detail)
+          handleMissingJob(jobId, detail)
           return
         }
         // Anything else here (backend unreachable, transient 5xx, etc.) used to call
@@ -593,6 +598,11 @@ function App() {
       setMessage(null)
       return
     }
+    // validateUpload only returns no aFile/hFile error when both are already selected, but
+    // that guarantee isn't visible to TypeScript through the `errors` object alone — narrow
+    // explicitly so the FormData.append calls below get `File`, not `File | null`.
+    const { aFile, hFile } = upload
+    if (!aFile || !hFile) return
     clearValidationTimeout()
     setBusy('job')
     setError(null)
@@ -603,8 +613,8 @@ function App() {
     form.append('check_mode', upload.checkMode)
     form.append('bilingual_level', upload.bilingualLevel)
     form.append('visual_review_mode', upload.visualReviewMode)
-    form.append('a_file', upload.aFile)
-    form.append('h_file', upload.hFile)
+    form.append('a_file', aFile)
+    form.append('h_file', hFile)
     try {
       const created = await fetchJson<JobDetail>('/api/jobs/', { method: 'POST', body: form })
       setUpload(EMPTY_UPLOAD)
