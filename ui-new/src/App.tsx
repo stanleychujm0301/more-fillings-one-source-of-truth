@@ -1604,7 +1604,14 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
             </div>
             <div className="review-chain">
               {evidences.length ? evidences.map((item, index) => (
-                <article key={`${diff.diff_id}-${index}`} className={`review-evidence-card ${item.side === 'H' ? 'h-side' : 'a-side'}`}>
+                // Reuse labelSideForJob's H/H_EN/EN -> h-side, A/H_ZH/ZH/H_CN -> a-side
+                // classification instead of a standalone `side === 'H'` check, which only
+                // matched the exact literal "H" and mis-colored bilingual evidence (side
+                // "H_EN"/"EN") as the A-side.
+                <article
+                  key={`${diff.diff_id}-${index}`}
+                  className={`review-evidence-card ${labelSideForJob(item.side, labels) === labels.h ? 'h-side' : 'a-side'}`}
+                >
                   <div className="review-evidence-top">
                     <span>{labelSideForJob(item.side, labels)}</span>
                     <strong>第 {item.page || '-'} 页</strong>
