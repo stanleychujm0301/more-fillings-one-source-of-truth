@@ -649,13 +649,29 @@ small {
 
 .empty {
   display: grid;
-  place-items: center;
+  justify-items: center;
+  gap: 8px;
   min-height: 120px;
-  padding: 18px;
+  padding: 24px 18px;
   color: var(--muted);
   border: 1px dashed var(--line);
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.empty-illustration {
+  color: rgba(0, 51, 141, 0.26);
+}
+
+.empty-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.empty-cta {
+  margin-top: 4px;
 }
 
 .dialog-backdrop {
@@ -1211,7 +1227,10 @@ a:focus-visible {
   .ticker-track,
   svg.spin,
   .progress-fill::after,
-  .stage-step.active .stage-dot {
+  .stage-step.active .stage-dot,
+  .skeleton-block,
+  .review-overlay,
+  .review-shell {
     animation: none;
   }
 
@@ -1224,6 +1243,61 @@ a:focus-visible {
   .job-submit-button.is-breathing::before {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* Page-entrance stagger: the top-level blocks of each page cascade in with a small fade +
+   lift on first mount, 60ms apart. Reduced-motion users get the final state instantly
+   (see the .stagger-in override further down in the prefers-reduced-motion block above). */
+@keyframes staggerFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.command-hero,
+.command-main,
+.command-history,
+.panel.wide > .panel-head,
+.panel.wide > .history-table,
+.detail-dashboard > * {
+  animation: staggerFadeUp 0.5s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.command-hero,
+.panel.wide > .panel-head,
+.detail-dashboard > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.command-main,
+.panel.wide > .history-table,
+.detail-dashboard > *:nth-child(2) {
+  animation-delay: 60ms;
+}
+
+.command-history,
+.detail-dashboard > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+
+.detail-dashboard > *:nth-child(4) {
+  animation-delay: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-hero,
+  .command-main,
+  .command-history,
+  .panel.wide > .panel-head,
+  .panel.wide > .history-table,
+  .detail-dashboard > * {
+    animation: none;
   }
 }
 
@@ -2119,6 +2193,7 @@ body {
   padding: 18px;
   background: rgba(13, 21, 32, 0.46);
   backdrop-filter: blur(18px);
+  animation: reviewOverlayFade 0.22s ease both;
 }
 
 .review-shell {
@@ -2132,6 +2207,27 @@ body {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 252, 0.92));
   box-shadow: var(--floating-shadow);
+  animation: reviewShellIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes reviewOverlayFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes reviewShellIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .review-header {
@@ -2802,6 +2898,38 @@ body {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
+}
+
+/* Skeleton loading state (job detail, while the initial fetch is in flight) */
+.skeleton-block {
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, rgba(18, 38, 63, 0.06) 25%, rgba(18, 38, 63, 0.12) 37%, rgba(18, 38, 63, 0.06) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.5s ease infinite;
+}
+
+@keyframes skeletonShimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+.job-detail-loading .skeleton-conclusion {
+  min-height: 180px;
+  border-radius: var(--radius-lg);
+}
+
+.job-detail-loading .skeleton-kpi {
+  min-height: 104px;
+}
+
+.job-detail-loading .loading-caption {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .dashboard-metric {

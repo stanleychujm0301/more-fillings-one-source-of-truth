@@ -197,6 +197,27 @@ export function UserIcon({ className, size = 16 }: IconProps) {
   )
 }
 
+// Larger, more decorative than the toolbar-scale icons above (same line language, bigger
+// canvas) — used inside EmptyState to give an otherwise blank state something to look at.
+export function EmptyIllustration({ className, size = 72 }: IconProps) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 96 96"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="20" y="14" width="42" height="56" rx="4" stroke="currentColor" strokeWidth="2" opacity="0.55" />
+      <path d="M28 30h26M28 40h26M28 50h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.4" />
+      <circle cx="63" cy="63" r="14" stroke="currentColor" strokeWidth="2.5" />
+      <path d="M73 73l9 9" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function BuildingIcon({ className, size = 16 }: IconProps) {
   return (
     <svg {...iconSvgProps(className, size)}>

@@ -11,6 +11,7 @@ import {
   ClockIcon,
   DocumentIcon,
   DownloadIcon,
+  EmptyIllustration,
   SpinnerIcon,
   UploadIcon,
   UserIcon,
@@ -1169,7 +1170,9 @@ function HistoryPage({
           <span>检查时间</span>
           <span>核查耗时</span>
         </div>
-        {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : <EmptyState label="暂无项目历史" />}
+        {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : (
+          <EmptyState label="暂无项目历史" ctaHref="#/cockpit" ctaLabel="去核查工作台新建任务" />
+        )}
       </div>
     </section>
   )
@@ -1263,7 +1266,7 @@ function JobDetailPage({
 }) {
   const [selectedTriage, setSelectedTriage] = useState<DiffTriageScope>('real')
   const [selectedSource, setSelectedSource] = useState<DiffSourceScope>('cross_report')
-  if (!job) return <EmptyState label="正在加载核查详情" />
+  if (!job) return <JobDetailLoading />
   const summary = job.comparison_summary || {}
   const diffs = job.diffs || []
   const labels = sideLabelsForJob(job)
@@ -1697,8 +1700,45 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
   )
 }
 
-function EmptyState({ label }: { label: string }) {
-  return <div className="empty">{label}</div>
+function EmptyState({
+  label,
+  ctaHref,
+  ctaLabel,
+}: {
+  label: string
+  ctaHref?: string
+  ctaLabel?: string
+}) {
+  return (
+    <div className="empty">
+      <EmptyIllustration className="empty-illustration" />
+      <p className="empty-label">{label}</p>
+      {ctaHref && ctaLabel && (
+        <a className="ghost empty-cta" href={ctaHref}>
+          {ctaLabel}
+          <ArrowRightIcon size={14} />
+        </a>
+      )}
+    </div>
+  )
+}
+
+function SkeletonBlock({ className }: { className?: string }) {
+  return <div className={`skeleton-block ${className || ''}`} aria-hidden="true" />
+}
+
+function JobDetailLoading() {
+  return (
+    <section className="stack detail-dashboard job-detail-loading" aria-busy="true" aria-live="polite">
+      <SkeletonBlock className="skeleton-conclusion" />
+      <div className="detail-kpi-grid">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <SkeletonBlock className="skeleton-kpi" key={index} />
+        ))}
+      </div>
+      <p className="loading-caption">正在加载核查详情</p>
+    </section>
+  )
 }
 
 function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail | null; onClose: () => void }) {
