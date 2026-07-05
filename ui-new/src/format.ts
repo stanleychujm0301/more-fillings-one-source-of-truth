@@ -91,12 +91,37 @@ export function uploadRequiredFileMessages(mode: UploadState['checkMode']): { aF
   }
 }
 
-export function validateUpload(upload: UploadState): UploadErrors {
+// The backend doesn't currently expose an upload size limit over /health, so this is the
+// fallback used whenever HealthPayload.upload_max_mb is missing/null.
+export const DEFAULT_UPLOAD_MAX_MB = 80
+
+function isPdfFileName(name: string): boolean {
+  return /\.pdf$/i.test(name.trim())
+}
+
+function fileValidationError(file: File, maxUploadMb: number): string | null {
+  if (!isPdfFileName(file.name)) return '请上传 PDF 格式文件'
+  const maxBytes = maxUploadMb * 1024 * 1024
+  if (file.size > maxBytes) return `文件大小超过限制（最大 ${maxUploadMb}MB）`
+  return null
+}
+
+export function validateUpload(upload: UploadState, maxUploadMb: number = DEFAULT_UPLOAD_MAX_MB): UploadErrors {
   const fileMessages = uploadRequiredFileMessages(upload.checkMode)
   const errors: UploadErrors = {}
   if (!upload.companyName.trim()) errors.companyName = '请输入项目名称'
-  if (!upload.aFile) errors.aFile = fileMessages.aFile
-  if (!upload.hFile) errors.hFile = fileMessages.hFile
+  if (!upload.aFile) {
+    errors.aFile = fileMessages.aFile
+  } else {
+    const fileError = fileValidationError(upload.aFile, maxUploadMb)
+    if (fileError) errors.aFile = fileError
+  }
+  if (!upload.hFile) {
+    errors.hFile = fileMessages.hFile
+  } else {
+    const fileError = fileValidationError(upload.hFile, maxUploadMb)
+    if (fileError) errors.hFile = fileError
+  }
   return errors
 }
 

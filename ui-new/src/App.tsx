@@ -3,6 +3,7 @@ import type { ChangeEvent, FormEvent } from 'react'
 import kpmgLogo from './assets/kpmg-logo.svg'
 import './App.css'
 import {
+  DEFAULT_UPLOAD_MAX_MB,
   DIFF_TRIAGE_GROUPS,
   JOB_REFRESH_STATUSES,
   RUNNING_STAGES,
@@ -80,6 +81,9 @@ type HealthPayload = {
   status?: string
   extraction_engine_version?: string | number | null
   result_version?: string | number | null
+  // Not currently returned by /health — read defensively and fall back to
+  // DEFAULT_UPLOAD_MAX_MB below if/when the backend doesn't send it.
+  upload_max_mb?: number | null
 }
 
 const RECENT_HISTORY_LIMIT = 8
@@ -578,7 +582,11 @@ function App() {
 
   async function submitJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const errors = validateUpload(upload)
+    // A submit can also be triggered programmatically (e.g. form.requestSubmit()),
+    // bypassing the submit button's `disabled` attribute. Guard here too so a job can
+    // never be double-submitted while one is already in flight.
+    if (busy === 'job') return
+    const errors = validateUpload(upload, health?.upload_max_mb ?? DEFAULT_UPLOAD_MAX_MB)
     if (Object.keys(errors).length) {
       showUploadErrors(errors)
       setError(null)
@@ -791,6 +799,16 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
       <div className="job-report-actions" aria-label="报告操作">
         <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML</span>
         <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
+        <a className="job-report-action-link" href="#/history">返回项目历史</a>
+      </div>
+    )
+  }
+  if (job.status === 'failed') {
+    // A failed job will never produce a report — showing "等待 HTML/PDF" here promises a
+    // result that is never coming. Say so plainly instead.
+    return (
+      <div className="job-report-actions" aria-label="报告操作">
+        <span className="job-report-action-link disabled" aria-disabled="true">任务失败，无报告</span>
         <a className="job-report-action-link" href="#/history">返回项目历史</a>
       </div>
     )
