@@ -259,6 +259,7 @@ export type JobDetail = JobSummary & {
   profile_h?: ProfilePayload | null
   coverage_items?: unknown[]
   diffs?: DiffItem[]
+  queue_position?: number | null
 }
 
 type ProfileDraft = {
@@ -1233,10 +1234,16 @@ function JobRunningProgress({ job }: { job: JobDetail }) {
     : 0
   const percentText = progressPercentText(rawPercent)
   const stageIdx = runningStageIndex(progress?.stage || job.status)
+  // While a job is still queued (not yet picked up by the worker), the backend reports
+  // how many other pending jobs are ahead of it. Surface that instead of the generic
+  // "排队等待" fallback so the user knows roughly how long the wait will be.
+  const queuePositionLabel = job.status === 'pending' && typeof job.queue_position === 'number' && job.queue_position > 0
+    ? `排队中，前方 ${job.queue_position} 个任务`
+    : null
   return (
     <div className="running-progress">
       <div className="running-progress-head">
-        <span>{progress?.message || stageLabel(progress?.stage || job.status)}</span>
+        <span>{queuePositionLabel || progress?.message || stageLabel(progress?.stage || job.status)}</span>
         {percentText && <strong>{percentText}</strong>}
       </div>
       <div className="progress-track">
