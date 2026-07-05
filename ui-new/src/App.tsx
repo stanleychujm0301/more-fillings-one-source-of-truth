@@ -66,6 +66,7 @@ import {
   visualOcrStatusLabel,
 } from './format'
 import type { DiffSourceScope, DiffTriageScope } from './format'
+import { useCountUpText } from './useCountUp'
 
 type Route = {
   page: 'cockpit' | 'history' | 'job' | 'profile'
@@ -1243,7 +1244,7 @@ function JobRunningProgress({ job }: { job: JobDetail }) {
           const state = index < stageIdx ? 'done' : index === stageIdx ? 'active' : 'todo'
           return (
             <li key={stage} className={`stage-step ${state}`}>
-              <span className="stage-dot" />
+              <span className="stage-dot">{state === 'done' ? <CheckIcon /> : null}</span>
               <span>{stageLabel(stage)}</span>
             </li>
           )
@@ -1509,10 +1510,11 @@ function DashboardMetric({
   note: string
   tone?: 'accent' | 'critical' | 'warning' | 'teal'
 }) {
+  const animatedValue = useCountUpText(value)
   return (
     <div className={`dashboard-metric ${tone || ''}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{animatedValue}</strong>
       <small>{note}</small>
     </div>
   )
