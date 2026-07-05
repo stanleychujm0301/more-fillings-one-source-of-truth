@@ -55,6 +55,54 @@ _NO_CACHE_HEADERS = {
 _HISTORY_LIMIT_MIN = 1
 _HISTORY_LIMIT_MAX = 100
 
+_PDF_MAGIC = b"%PDF-"
+_UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1MB
+
+
+async def _save_upload_pdf(upload: UploadFile, dest: Path) -> None:
+    """流式落盘一份年报上传：校验 PDF 魔数、强制大小上限、分块异步写入。
+
+    - 首个分块不以 `%PDF-` 开头即视为非 PDF，返回 415（此时还未创建目标文件，无需清理）。
+    - 边读边累计字节数，一旦超过 `settings.upload_max_bytes` 立即 413，并删除已写入的
+      半成品文件，不留垃圾。
+    - 用 `asyncio.to_thread` 包裹每次落盘写入，避免大文件同步 copyfileobj 阻塞事件循环。
+    """
+    first_chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+    if not first_chunk.startswith(_PDF_MAGIC):
+        raise HTTPException(
+            status_code=415,
+            detail=f"{upload.filename or dest.name} is not a valid PDF file",
+        )
+
+    max_bytes = int(settings.upload_max_bytes)
+    total = len(first_chunk)
+    if total > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{upload.filename or dest.name} exceeds the upload size limit ({max_bytes} bytes)",
+        )
+
+    handle = dest.open("wb")
+    try:
+        await asyncio.to_thread(handle.write, first_chunk)
+        while True:
+            chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"{upload.filename or dest.name} exceeds the upload size limit ({max_bytes} bytes)",
+                )
+            await asyncio.to_thread(handle.write, chunk)
+    except Exception:
+        handle.close()
+        dest.unlink(missing_ok=True)
+        raise
+    else:
+        handle.close()
+
 
 @router.get("/history")
 def list_jobs_endpoint(limit: int = 10, scope: str = "project") -> list[dict]:
@@ -96,10 +144,14 @@ async def create_job(
     h_name = Path(h_file.filename or "h.pdf").name
     a_path = upload_dir / f"{job_id}_{a_prefix}_{a_name}"
     h_path = upload_dir / f"{job_id}_{h_prefix}_{h_name}"
-    with a_path.open("wb") as f:
-        shutil.copyfileobj(a_file.file, f)
-    with h_path.open("wb") as f:
-        shutil.copyfileobj(h_file.file, f)
+    try:
+        await _save_upload_pdf(a_file, a_path)
+        await _save_upload_pdf(h_file, h_path)
+    except HTTPException:
+        # 校验失败时清理本次请求已写到磁盘的半成品文件（无论是哪一份先失败）。
+        a_path.unlink(missing_ok=True)
+        h_path.unlink(missing_ok=True)
+        raise
 
     job = apply_current_user_context(
         Job(
@@ -224,7 +276,15 @@ def get_job_detail(job_id: str):
     if not job_meta:
         raise HTTPException(status_code=404, detail="job not found")
     job_meta["diffs"] = [d.model_dump() for d in get_diffs(job_id)]
+    if str(job_meta.get("status") or "").lower() == JobStatus.PENDING.value:
+        job_meta["queue_position"] = _pending_job_queue_position(job_id)
     return job_meta
+
+
+def _pending_job_queue_position(job_id: str) -> int | None:
+    from ahcc.api.job_runner import queue_position
+
+    return queue_position(job_id)
 
 
 @router.get("/{job_id}/report.xlsx")

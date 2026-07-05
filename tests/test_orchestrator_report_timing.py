@@ -11,8 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ahcc.config import settings
+from ahcc.llm.client import record_llm_failure
 from ahcc.orchestrator import Orchestrator
-from ahcc.schemas import Language, ReportDocument, ReportSide
+from ahcc.schemas import Job, Language, ReportDocument, ReportSide
 
 
 def _doc(doc_id: str) -> ReportDocument:
@@ -77,6 +78,60 @@ def test_ah_report_generated_after_duration_and_summary(monkeypatch):
     # 任务结束后字段仍在
     assert job.duration_seconds is not None
     assert job.status.value == "done"
+
+
+def test_llm_call_failures_are_summarized_into_module_warnings(monkeypatch):
+    """B10: cached_call 失败会静默返回 {}，语义复核/差异比对实际空转，但界面此前没有任何
+    警示。任何在本任务运行期间被记录的 LLM 失败（ahcc.llm.client.record_llm_failure）都必须
+    在报告结算前被汇总进 module_warnings，传给 _build_comparison_summary。"""
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(settings, "demo_mode", True)
+
+    async def fake_parse(self, file_path, side):
+        return _doc(file_path)
+
+    async def fake_build_profile(self, doc):
+        return SimpleNamespace(profile_summary={}, metrics=[], narratives=[])
+
+    async def fake_numeric(self, a, b):
+        # 模拟数值检查内部某次 cached_call 失败（比如 API Key 未配置）。
+        record_llm_failure("llm-fail-job", "deepseek conn error")
+        return []
+
+    async def fake_standard(self, a, b):
+        return []
+
+    async def fake_disclosure(self, a, b):
+        return []
+
+    async def fake_coverage(self, a, b):
+        return ([], [])
+
+    def fake_summary(self, job, a, b, *, visual_review_mode="smart", module_warnings=None):
+        captured["module_warnings"] = list(module_warnings or [])
+        return {"_built": True}
+
+    async def fake_build_report(self, job):
+        return None
+
+    monkeypatch.setattr(Orchestrator, "_parse", fake_parse)
+    monkeypatch.setattr(Orchestrator, "_build_profile", fake_build_profile)
+    monkeypatch.setattr(Orchestrator, "_check_numeric_profiles", fake_numeric)
+    monkeypatch.setattr(Orchestrator, "_check_standard_profiles", fake_standard)
+    monkeypatch.setattr(Orchestrator, "_check_disclosure_profiles", fake_disclosure)
+    monkeypatch.setattr(Orchestrator, "_build_disclosure_coverage", fake_coverage)
+    monkeypatch.setattr(Orchestrator, "_build_comparison_summary", fake_summary)
+    monkeypatch.setattr(Orchestrator, "_build_report", fake_build_report)
+
+    job = Job(job_id="llm-fail-job", a_file="a.pdf", h_file="h.pdf")
+
+    asyncio.run(Orchestrator().run("a.pdf", "h.pdf", company_name="X", check_mode="ah", job=job))
+
+    warnings = captured["module_warnings"]
+    assert any(w.get("flag") == "llm_calls_failed" for w in warnings)
+    matching = [w for w in warnings if w.get("flag") == "llm_calls_failed"]
+    assert "1" in matching[0]["message"]
+    assert "LLM" in matching[0]["message"]
 
 
 def test_bilingual_report_generated_after_duration_and_summary(monkeypatch):

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -46,6 +47,8 @@ def runner_env(monkeypatch, tmp_path):
     monkeypatch.setattr(job_runner.settings, "job_timeout_seconds", 60.0)
     monkeypatch.setattr(job_runner.settings, "job_heartbeat_stale_seconds", 60.0)
     job_runner._semaphores.clear()
+    job_runner._queued_job_ids.clear()
+    job_runner._running_job_id = None
     return {"saved": saved, "progress": progress, "tmp": tmp_path}
 
 
@@ -186,3 +189,54 @@ job['status'] = 'done'
     assert progress[0].status == JobStatus.PARSING
     assert progress[0].comparison_summary.get("current_percent") == 10
     assert runner_env["saved"][0].status == JobStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_second_concurrent_submission_is_queued_and_exposed(monkeypatch, runner_env):
+    """B5: JOB_MAX_CONCURRENCY=1 means a second job submitted while the first is still running
+    must queue. That queueing must be observable via job_runner.current_running_job_id()/
+    queued_job_ids()/queue_position(), and — critically — must NOT disturb the first job's own
+    progress trail: progress[0] for the running job must still be the PARSING record its worker
+    wrote (same invariant as test_subprocess_progress_is_persisted), because the "queued"
+    progress write only happens for jobs that actually have to wait."""
+    _fake_worker(
+        monkeypatch,
+        """
+import json, time
+from pathlib import Path
+job_dir = Path(__JOB_DIR__)
+(job_dir / 'heartbeat.json').write_text('{"ts": 0, "pid": 1}', encoding='utf-8')
+(job_dir / 'progress.json').write_text(json.dumps({'status': 'parsing', 'comparison_summary': {'current_stage': 'parsing', 'current_percent': 10}}), encoding='utf-8')
+time.sleep(1.0)
+payload = json.loads((job_dir / 'job.json').read_text(encoding='utf-8'))
+job = payload['job']
+job['status'] = 'done'
+(job_dir / 'result.json').write_text(json.dumps(job, ensure_ascii=False), encoding='utf-8')
+""",
+    )
+
+    job_a = _job("jr-queue-a")
+    job_b = _job("jr-queue-b")
+
+    task_a = asyncio.create_task(job_runner.run_job(job_a))
+    await asyncio.sleep(0.3)  # let A acquire the semaphore and start its subprocess
+    assert job_runner.current_running_job_id() == "jr-queue-a"
+    assert job_runner.queued_job_ids() == []
+
+    task_b = asyncio.create_task(job_runner.run_job(job_b))
+    await asyncio.sleep(0.1)  # let B observe the locked semaphore and register as queued
+    assert job_runner.queued_job_ids() == ["jr-queue-b"]
+    assert job_runner.queue_position("jr-queue-b") == 1
+    assert job_runner.queue_position("jr-queue-a") is None
+
+    await asyncio.gather(task_a, task_b)
+
+    assert job_runner.queued_job_ids() == []
+    assert job_runner.current_running_job_id() is None
+
+    progress = runner_env["progress"]
+    a_progress = [p for p in progress if p.job_id == "jr-queue-a"]
+    assert a_progress[0].status == JobStatus.PARSING
+    b_progress = [p for p in progress if p.job_id == "jr-queue-b"]
+    assert b_progress, "queued job should get a queued progress record"
+    assert b_progress[0].status == JobStatus.PENDING

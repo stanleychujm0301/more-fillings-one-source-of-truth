@@ -36,3 +36,25 @@ def test_health_endpoint_runtime_payload_shape(monkeypatch):
     payload = response.json()
     assert payload["status"] == "ok"
     assert set(payload["visual_ocr"]) == {"ocr_engine_available", "paddleocr", "easyocr"}
+
+
+def test_health_endpoint_exposes_job_queue_and_upload_limit(monkeypatch):
+    """B5: /health 应额外暴露排队状态（当前运行中的 job_id + 排队列表）与上传大小上限
+    （MB），前者供运维/演示排查排队卡顿，后者供前端展示上传限制而不必硬编码。"""
+    from ahcc.api import job_runner
+
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(job_runner, "_running_job_id", "job-running-1")
+    monkeypatch.setattr(job_runner, "_queued_job_ids", ["job-queued-1", "job-queued-2"])
+    monkeypatch.setattr(api_main.settings, "upload_max_bytes", 80 * 1024 * 1024, raising=False)
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_queue"] == {
+        "running": "job-running-1",
+        "queued": ["job-queued-1", "job-queued-2"],
+    }
+    assert payload["upload_max_mb"] == 80.0

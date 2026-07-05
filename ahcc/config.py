@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     storage_dir: Path = Path("./storage")
     chroma_persist_dir: Path = Path("./storage/chroma")
     sqlite_path: Path = Path("./storage/ahcc.db")
+    # 年报上传大小上限（字节），超出立即 413 并清理半成品文件
+    upload_max_bytes: int = 80 * 1024 * 1024
 
     # 性能
     llm_concurrency: int = 4

@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -27,13 +28,24 @@ from loguru import logger
 
 from ahcc.config import settings
 from ahcc.schemas import Job, JobStatus
-from ahcc.storage.repository import apply_current_user_context, save_job, save_job_progress
+from ahcc.storage.repository import (
+    apply_current_user_context,
+    running_progress_summary,
+    save_job,
+    save_job_progress,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _POLL_INTERVAL_SECONDS = 2.0
 
 # 每个事件循环一把信号量（asyncio.Semaphore 不能跨 loop 复用；测试会反复建 loop）
 _semaphores: dict[int, asyncio.Semaphore] = {}
+
+# 队列状态：当前正在跑的 job_id + 排队中的 job_id（按提交顺序），供 /health 与任务详情接口
+# 对外暴露排队情况。FastAPI 的同步端点跑在线程池里，可能与事件循环并发读取，加锁保护。
+_queue_state_lock = threading.Lock()
+_running_job_id: str | None = None
+_queued_job_ids: list[str] = []
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -43,6 +55,61 @@ def _get_semaphore() -> asyncio.Semaphore:
         sem = asyncio.Semaphore(max(1, int(settings.job_max_concurrency)))
         _semaphores[loop_id] = sem
     return sem
+
+
+def current_running_job_id() -> str | None:
+    """当前正在执行（已拿到并发信号量）的 job_id；空闲时为 None。"""
+    with _queue_state_lock:
+        return _running_job_id
+
+
+def queued_job_ids() -> list[str]:
+    """排队中的 job_id 列表，按提交顺序排列。"""
+    with _queue_state_lock:
+        return list(_queued_job_ids)
+
+
+def queue_position(job_id: str) -> int | None:
+    """job_id 在排队列表中的位置（从 1 开始）；不在排队列表中则返回 None。"""
+    with _queue_state_lock:
+        try:
+            return _queued_job_ids.index(job_id) + 1
+        except ValueError:
+            return None
+
+
+def _mark_queued(job_id: str) -> None:
+    with _queue_state_lock:
+        if job_id not in _queued_job_ids:
+            _queued_job_ids.append(job_id)
+
+
+def _unmark_queued(job_id: str) -> None:
+    with _queue_state_lock:
+        if job_id in _queued_job_ids:
+            _queued_job_ids.remove(job_id)
+
+
+def _set_running_job_id(job_id: str | None) -> None:
+    global _running_job_id
+    with _queue_state_lock:
+        _running_job_id = job_id
+
+
+def _persist_queued_progress(job: Job) -> None:
+    """仅在信号量已被占用（本次提交确实需要排队）时才写一条 pending/queued 进度记录 ——
+    若信号量空闲、直接开始执行，则不写，以保持"首条进度记录必为 PARSING"的存量语义。"""
+    try:
+        summary = running_progress_summary(
+            job.comparison_summary,
+            JobStatus.PENDING,
+            0,
+            "排队等待中：已有任务在执行，将自动开始",
+        )
+        queued_job = job.model_copy(update={"status": JobStatus.PENDING, "comparison_summary": summary})
+        save_job_progress(apply_current_user_context(queued_job))
+    except Exception:  # noqa: BLE001 - 排队进度写失败不应阻塞任务本身
+        logger.exception(f"[{job.job_id}] queued progress persistence failed")
 
 
 def _worker_command(job_dir: Path) -> list[str]:
@@ -75,16 +142,29 @@ async def run_job(
         )
         return
 
+    sem = _get_semaphore()
+    # 只有信号量已被占用（本次提交确实要排队）时才标记排队 + 写一条排队进度；空闲直接开始
+    # 执行时不写，避免打破"首条进度记录必为 PARSING"的存量语义。
+    if sem.locked():
+        _mark_queued(job.job_id)
+        _persist_queued_progress(job)
     try:
-        async with _get_semaphore():
-            await _run_subprocess(
-                job,
-                bilingual_level=bilingual_level,
-                visual_review_mode=visual_review_mode,
-            )
+        async with sem:
+            _unmark_queued(job.job_id)
+            _set_running_job_id(job.job_id)
+            try:
+                await _run_subprocess(
+                    job,
+                    bilingual_level=bilingual_level,
+                    visual_review_mode=visual_review_mode,
+                )
+            finally:
+                _set_running_job_id(None)
     except Exception as exc:  # noqa: BLE001 - 监督者自身异常也要把任务收尾
         logger.exception(f"[{job.job_id}] job supervisor failed")
         _save_failed(job, f"job supervisor failed: {exc}")
+    finally:
+        _unmark_queued(job.job_id)
 
 
 async def _run_subprocess(

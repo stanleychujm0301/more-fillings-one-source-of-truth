@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+import threading
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -201,6 +203,42 @@ def _is_placeholder_key(key: str) -> bool:
 # 简易磁盘缓存（演示稳定性兜底）
 _CACHE_DIR = settings.storage_dir / "llm_cache"
 
+# LLM 调用失败静默降级（cached_call 捕获异常后返回 {} / ""）过去完全不对外暴露 ——
+# 任务照常显示 done，但语义复核/差异比对实际是空转，界面没有任何警示。这里按 job_id
+# 记录失败次数，供 orchestrator 报告生成阶段汇总进 module_warnings。
+_llm_failures: dict[str, list[str]] = {}
+_llm_failures_lock = threading.Lock()
+
+# 当前任务 ID 的 contextvar：Orchestrator.run() 在任务开始时设置，使深层调用链里的
+# cached_call（numeric/coverage/bilingual/key_metric_tamper/vlm 等模块）无需逐层透传
+# job_id 参数即可把失败归因到当前任务；asyncio.to_thread 会自动拷贝 context，跨线程仍生效。
+_current_job_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_current_job_id", default=None
+)
+
+
+def set_current_job_id(job_id: Optional[str]):
+    """设置当前任务 ID，返回 Token 供调用方在 finally 里 `._current_job_id.reset(token)`。"""
+    return _current_job_id.set(job_id)
+
+
+def record_llm_failure(job_id: str, reason: str) -> None:
+    """记录一次 LLM 调用失败（job_id 维度），供 consume_llm_failures 汇总。"""
+    with _llm_failures_lock:
+        _llm_failures.setdefault(job_id, []).append(reason)
+
+
+def consume_llm_failures(job_id: str) -> list[str]:
+    """读取并清空某任务的失败记录（一次性消费，避免重复告警）。"""
+    with _llm_failures_lock:
+        return _llm_failures.pop(job_id, [])
+
+
+def _record_current_job_llm_failure(reason: str) -> None:
+    job_id = _current_job_id.get()
+    if job_id:
+        record_llm_failure(job_id, reason)
+
 
 def cached_call(
     purpose: Purpose,
@@ -236,6 +274,7 @@ def cached_call(
     has_key = getattr(settings, api_key_attr, "") if api_key_attr else ""
     if not has_key or _is_placeholder_key(has_key):
         logger.warning(f"{client.provider} API Key 未配置或为占位符，跳过 LLM 调用")
+        _record_current_job_llm_failure(f"{client.provider} API Key 未配置或为占位符")
         return {} if json_mode else ""
 
     try:
@@ -245,6 +284,7 @@ def cached_call(
             result = client.chat(messages, **kwargs)
     except Exception as exc:
         logger.error(f"LLM 调用失败，跳过本次: {exc}")
+        _record_current_job_llm_failure(str(exc))
         return {} if json_mode else ""
 
     cache_file.write_text(

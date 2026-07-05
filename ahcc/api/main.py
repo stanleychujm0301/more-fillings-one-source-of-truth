@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from loguru import logger
 
+from ahcc.api.job_runner import current_running_job_id, queued_job_ids
 from ahcc.api.routes_job import router as job_router
 from ahcc.api.routes_review import router as review_router
 from ahcc.api.routes_user import router as user_router
@@ -149,6 +150,15 @@ def health() -> dict:
         "branch_repair_version": 1,
         "visual_ocr": _ocr_health(),
         "storage": _storage_health(),
+        "job_queue": _job_queue_health(),
+        "upload_max_mb": round(settings.upload_max_bytes / (1024 * 1024), 2),
+    }
+
+
+def _job_queue_health() -> dict:
+    return {
+        "running": current_running_job_id(),
+        "queued": queued_job_ids(),
     }
 
 

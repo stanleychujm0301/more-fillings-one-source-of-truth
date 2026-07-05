@@ -146,10 +146,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:  # noqa: BLE001 - Orchestrator 自身兜底后仍可能有极端异常
         logger.exception(f"[{job.job_id}] worker crashed in orchestrator")
+        from ahcc.errors import friendly_error_message
+
         completed = job.model_copy(
             update={
                 "status": JobStatus.FAILED,
-                "error": f"worker exception: {exc}",
+                "error": friendly_error_message(f"worker exception: {exc}"),
                 "finished_at": datetime.utcnow(),
                 "duration_seconds": (datetime.utcnow() - job.started_at).total_seconds(),
             }

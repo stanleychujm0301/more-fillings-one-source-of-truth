@@ -466,11 +466,22 @@ def mark_stale_running_jobs_failed(
     stale_after_seconds: float,
     now: datetime | None = None,
 ) -> int:
-    """Fail running jobs whose in-memory background task cannot still exist."""
+    """Fail running jobs whose in-memory background task cannot still exist.
+
+    Pending jobs are skipped: with JOB_MAX_CONCURRENCY=1, a queued job stays `pending` and
+    receives no progress writes until it's dequeued, so it can look arbitrarily "stale" by age
+    alone even though it's simply waiting its turn — this periodic sweep must not fail it just
+    for queuing longer than `stale_after_seconds`. (mark_interrupted_running_jobs_failed, used
+    for service-restart recovery, is a different function with different semantics and still
+    fails pending jobs unconditionally.)
+    """
     current = now or datetime.utcnow()
     return _mark_running_jobs_failed(
         current=current,
-        should_fail=lambda row, summary: _running_job_age_seconds(row, summary, current) > stale_after_seconds,
+        should_fail=lambda row, summary: (
+            row["status"] != JobStatus.PENDING.value
+            and _running_job_age_seconds(row, summary, current) > stale_after_seconds
+        ),
         message_factory=lambda row, summary: (
             "background job interrupted: service restarted or no progress "
             f"for more than {int(stale_after_seconds)} seconds; please rerun the task."

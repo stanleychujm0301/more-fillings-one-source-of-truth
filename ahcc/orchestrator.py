@@ -15,6 +15,8 @@ from typing import Any, Callable
 from loguru import logger
 
 from ahcc.config import settings
+from ahcc.errors import friendly_error_message
+from ahcc.llm.client import consume_llm_failures, set_current_job_id
 from ahcc.schemas import (
     DisclosureCoverageItem,
     DiffScope,
@@ -57,6 +59,9 @@ class Orchestrator:
             a_file=a_file,
             h_file=h_file,
         )
+        # 记录当前任务 ID，使深层 cached_call（numeric/coverage/bilingual/...）调用失败时
+        # 能把失败次数归因到本任务，供报告阶段汇总进 module_warnings（见 B10）。
+        set_current_job_id(job.job_id)
         logger.info(f"[{job.job_id}] 启动任务: mode={check_mode} A={a_file}  H={h_file}")
         self._emit(job, JobStatus.PENDING, 0, "任务已创建")
 
@@ -160,6 +165,7 @@ class Orchestrator:
             # ---------- 阶段 4：报告 ----------
             # 先结算汇总与耗时，再生成报告 —— 确保报告内「核查耗时/生成时间/提取预警」取到真实值
             self._emit(job, JobStatus.REPORTING, 95, "生成报告")
+            self._append_llm_failure_warnings(job, module_warnings)
             job.comparison_summary = self._build_comparison_summary(
                 job,
                 profile_a,
@@ -180,7 +186,7 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[{job.job_id}] 任务失败")
             job.status = JobStatus.FAILED
-            job.error = str(exc)
+            job.error = friendly_error_message(exc)
             self._emit(job, JobStatus.FAILED, 0, f"失败：{exc}")
             return job
 
@@ -242,6 +248,7 @@ class Orchestrator:
 
         self._emit(job, JobStatus.REPORTING, 95, "生成英文翻译核对报告")
         # 先结算汇总与耗时，再生成报告；report_seconds 经 phase_timings 引用在报告后回填
+        self._append_llm_failure_warnings(job, module_warnings)
         job.comparison_summary = self._build_bilingual_summary(
             job,
             doc_zh,
@@ -939,6 +946,24 @@ class Orchestrator:
             "a_extraction_audit": a_audit,
             "h_extraction_audit": h_audit,
         }
+
+    def _append_llm_failure_warnings(self, job: Job, module_warnings: list) -> None:
+        """B10: cached_call 失败时静默返回 {} 会让语义复核/差异比对空转，但界面此前没有任何
+        警示。汇总本任务在 ahcc.llm.client 里记录的失败次数，追加一条 module_warnings，
+        提示用户结果可能不完整。"""
+        failures = consume_llm_failures(job.job_id)
+        if not failures:
+            return
+        module_warnings.append(
+            {
+                "flag": "llm_calls_failed",
+                "message": f"{len(failures)} 次 LLM 调用失败，结果可能不完整",
+                "category": "llm",
+                "severity": "medium",
+                "blocking": False,
+                "side": "",
+            }
+        )
 
     def _visual_ocr_warning(self, visual_ocr_status: dict | None) -> dict | None:
         if not visual_ocr_status:

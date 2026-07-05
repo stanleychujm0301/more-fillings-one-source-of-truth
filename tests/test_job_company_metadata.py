@@ -302,11 +302,30 @@ def test_repository_marks_stale_running_jobs_failed(monkeypatch, workspace_tmp):
         )
     )
 
+    stale_pending = now - timedelta(minutes=30)
+    repository.save_job(
+        Job(
+            job_id="stale-pending",
+            company_name="Queued",
+            a_file="a.pdf",
+            h_file="h.pdf",
+            status=JobStatus.PENDING,
+            started_at=stale_pending,
+            comparison_summary={
+                "current_stage": "pending",
+                "current_percent": 0,
+                "current_message": "queued",
+                "last_progress_at": stale_pending.isoformat(),
+            },
+        )
+    )
+
     changed = repository.mark_stale_running_jobs_failed(stale_after_seconds=900, now=now)
 
     stale = repository.get_job("stale-running")
     fresh = repository.get_job("fresh-running")
     done = repository.get_job("done-job")
+    pending = repository.get_job("stale-pending")
     assert changed == 1
     assert stale["status"] == "failed"
     assert stale["finished_at"] == now.isoformat()
@@ -316,6 +335,11 @@ def test_repository_marks_stale_running_jobs_failed(monkeypatch, workspace_tmp):
     assert stale["comparison_summary"]["current_percent"] == 0
     assert fresh["status"] == "parsing"
     assert done["status"] == "done"
+    # B1: a job stuck in the JOB_MAX_CONCURRENCY=1 queue never gets a progress write while
+    # pending — it can look "stale" by age alone even though it's simply waiting its turn.
+    # The periodic sweep must not fail pending jobs; only mark_interrupted_running_jobs_failed
+    # (service-restart recovery) is allowed to touch pending jobs unconditionally.
+    assert pending["status"] == "pending"
 
 
 def test_repository_marks_interrupted_running_jobs_failed(monkeypatch, workspace_tmp):
@@ -348,6 +372,70 @@ def test_repository_marks_interrupted_running_jobs_failed(monkeypatch, workspace
     assert interrupted["duration_seconds"] == 120
     assert "service restarted" in interrupted["error"]
     assert interrupted["comparison_summary"]["current_stage"] == "failed"
+
+
+def test_job_detail_exposes_queue_position_for_pending_jobs(monkeypatch, workspace_tmp):
+    """B5: a pending job's detail response should surface its 1-based position in the queue
+    (job_runner.queue_position), so the UI can show "第 N 位排队中" instead of a bare spinner."""
+    from ahcc.api import job_runner
+
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(
+        routes_job,
+        "get_job",
+        lambda job_id: {
+            "job_id": job_id,
+            "company_name": "Queued Co",
+            "check_mode": "ah",
+            "a_file": "a.pdf",
+            "h_file": "h.pdf",
+            "status": "pending",
+            "coverage_items": [],
+            "comparison_summary": {},
+        }
+        if job_id == "job-b"
+        else None,
+    )
+    monkeypatch.setattr(routes_job, "get_diffs", lambda job_id: [])
+    monkeypatch.setattr(job_runner, "_queued_job_ids", ["job-a", "job-b", "job-c"])
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/api/jobs/job-b")
+
+    assert response.status_code == 200
+    assert response.json()["queue_position"] == 2
+
+
+def test_job_detail_queue_position_is_null_when_not_queued(monkeypatch, workspace_tmp):
+    """A pending job that isn't (or is no longer) in the queue list should get a null/0
+    queue_position rather than raising."""
+    from ahcc.api import job_runner
+
+    monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(
+        routes_job,
+        "get_job",
+        lambda job_id: {
+            "job_id": job_id,
+            "company_name": "Solo Co",
+            "check_mode": "ah",
+            "a_file": "a.pdf",
+            "h_file": "h.pdf",
+            "status": "pending",
+            "coverage_items": [],
+            "comparison_summary": {},
+        }
+        if job_id == "job-solo"
+        else None,
+    )
+    monkeypatch.setattr(routes_job, "get_diffs", lambda job_id: [])
+    monkeypatch.setattr(job_runner, "_queued_job_ids", [])
+
+    with TestClient(api_main.app) as client:
+        response = client.get("/api/jobs/job-solo")
+
+    assert response.status_code == 200
+    assert response.json().get("queue_position") in (None, 0)
 
 
 def test_lifespan_marks_stale_running_jobs_failed(monkeypatch):
