@@ -14,6 +14,11 @@ import type {
 
 export const JOB_REFRESH_STATUSES = new Set(['pending', 'parsing', 'profiling', 'checking', 'reporting'])
 
+// Backend timestamps are naive UTC ISO strings with no timezone suffix
+// (e.g. "2026-07-05T03:53:00"). Matches a trailing "Z" or a numeric UTC
+// offset such as "+08:00" / "-0800".
+const TIMEZONE_SUFFIX_RE = /(?:Z|[+-]\d{2}:?\d{2})$/
+
 export function textValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '-'
   return String(value)
@@ -25,10 +30,17 @@ export function localized(value?: { zh?: string | null; en?: string | null }): s
 
 export function formatDate(value?: string | null): string {
   if (!value) return '-'
-  const date = new Date(value)
+  // `new Date(...)` parses a timezone-less string using the *browser's local*
+  // timezone rather than UTC, which silently shifts every displayed
+  // timestamp by the browser's UTC offset (e.g. 8 hours early for China
+  // Standard Time). Force UTC parsing by appending "Z" when the backend
+  // string doesn't already carry a timezone marker.
+  const normalized = TIMEZONE_SUFFIX_RE.test(value) ? value : `${value}Z`
+  const date = new Date(normalized)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
+    year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -285,9 +297,14 @@ export function summaryNumber(summary: Record<string, unknown>, key: string): nu
 }
 
 export function formatDuration(seconds?: number | null): string {
-  if (!seconds || !Number.isFinite(seconds)) return '—'
-  const minutes = Math.floor(seconds / 60)
-  const rest = Math.round(seconds % 60)
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—'
+  // Round the *total* seconds first, then split into minutes/seconds — rounding the
+  // remainder in isolation (old: `Math.round(seconds % 60)`) can produce a remainder of
+  // 60 (e.g. 119.6s -> floor(119.6/60)=1 minute, round(119.6%60)=round(59.6)=60), which
+  // rendered the nonsensical "1分60秒". Rounding first guarantees the remainder is 0-59.
+  const totalSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(totalSeconds / 60)
+  const rest = totalSeconds % 60
   return minutes ? `${minutes}分${rest}秒` : `${rest}秒`
 }
 
@@ -428,12 +445,21 @@ export function runningStageIndex(stage?: string | null): number {
   return RUNNING_STAGES.indexOf(stage as (typeof RUNNING_STAGES)[number])
 }
 
+// Shared by JobRunningProgress (detail page progress bar) and runningProgressLabel /
+// historyProgressLabel below, so "progress percent is null/undefined" is handled the same
+// way everywhere: no percent suffix at all (just the stage text), instead of one place
+// defaulting to a misleading "0%" and another silently dropping the percent sign.
+export function progressPercentText(percent?: number | null): string {
+  if (typeof percent !== 'number' || !Number.isFinite(percent)) return ''
+  return `${Math.max(0, Math.min(100, percent))}%`
+}
+
 export function runningProgressLabel(job: JobDetail): string {
   const progress = latestProgress(job)
   if (!progress) return statusLabel(job.status)
   const label = progress.message || stageLabel(progress.stage)
-  const percent = progress.percent !== null && progress.percent !== undefined ? ` ${progress.percent}%` : ''
-  return `${label}${percent}`
+  const percentText = progressPercentText(progress.percent)
+  return percentText ? `${label} ${percentText}` : label
 }
 
 export function historyProgressLabel(item: JobSummary): string {
@@ -441,8 +467,8 @@ export function historyProgressLabel(item: JobSummary): string {
   const progress = runningProgressFromSummary(item.comparison_summary)
   if (!progress) return statusLabel(item.status)
   const label = progress.message || stageLabel(progress.stage)
-  const percent = progress.percent !== null && progress.percent !== undefined ? ` ${progress.percent}%` : ''
-  return `${label}${percent}`
+  const percentText = progressPercentText(progress.percent)
+  return percentText ? `${label} ${percentText}` : label
 }
 
 export function visualOcrStatusLabel(summary?: Record<string, unknown>): string {

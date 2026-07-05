@@ -32,6 +32,7 @@ import {
   profileCoverage,
   profileScanText,
   profileWarnings,
+  progressPercentText,
   reviewEvidenceMetric,
   reviewValues,
   runningProgressLabel,
@@ -1061,16 +1062,19 @@ function MissingJobFallback({
 function JobRunningProgress({ job }: { job: JobDetail }) {
   const progress = latestProgress(job)
   const rawPercent = progress?.percent
-  const percent = Math.max(0, Math.min(100, rawPercent ?? 0))
+  const fillPercent = typeof rawPercent === 'number' && Number.isFinite(rawPercent)
+    ? Math.max(0, Math.min(100, rawPercent))
+    : 0
+  const percentText = progressPercentText(rawPercent)
   const stageIdx = runningStageIndex(progress?.stage || job.status)
   return (
     <div className="running-progress">
       <div className="running-progress-head">
         <span>{progress?.message || stageLabel(progress?.stage || job.status)}</span>
-        <strong>{percent}%</strong>
+        {percentText && <strong>{percentText}</strong>}
       </div>
       <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${percent}%` }} />
+        <div className="progress-fill" style={{ width: `${fillPercent}%` }} />
       </div>
       <ol className="stage-stepper">
         {RUNNING_STAGES.map((stage, index) => {
@@ -1660,7 +1664,7 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
                 <span>准则推理</span>
                 <strong>{diff.standard_reasoning.expected ? '符合预期差异' : '不符合预期差异'}</strong>
                 <p>{diff.standard_reasoning.rationale || '—'}</p>
-                <small>置信度 {valueText(diff.standard_reasoning.confidence ? `${Math.round(diff.standard_reasoning.confidence * 100)}%` : null)}</small>
+                <small>置信度 {valueText(typeof diff.standard_reasoning.confidence === 'number' ? `${Math.round(diff.standard_reasoning.confidence * 100)}%` : null)}</small>
                 {citations.length > 0 && (
                   <div className="review-citations">
                     <span>引用条款</span>
