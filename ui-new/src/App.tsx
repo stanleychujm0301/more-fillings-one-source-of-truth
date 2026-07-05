@@ -3,6 +3,20 @@ import type { ChangeEvent, FormEvent } from 'react'
 import kpmgLogo from './assets/kpmg-logo.svg'
 import './App.css'
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BuildingIcon,
+  CheckIcon,
+  CloseIcon,
+  ClockIcon,
+  DocumentIcon,
+  DownloadIcon,
+  SpinnerIcon,
+  UploadIcon,
+  UserIcon,
+  WarningIcon,
+} from './icons'
+import {
   DEFAULT_UPLOAD_MAX_MB,
   DIFF_TRIAGE_GROUPS,
   JOB_REFRESH_STATUSES,
@@ -715,6 +729,13 @@ function App() {
             </span>
           </a>
           <span id="statusBadge" className={`api-status ${connectionStatus}`}>
+            {connectionStatus === 'connected' ? (
+              <CheckIcon size={13} />
+            ) : connectionStatus === 'disconnected' ? (
+              <WarningIcon size={13} />
+            ) : (
+              <SpinnerIcon size={13} className="spin" />
+            )}
             {connectionStatus === 'connected' ? 'API 已连接' : connectionStatus === 'disconnected' ? '连接中断' : '正在连接'}
           </span>
         </div>
@@ -740,7 +761,9 @@ function App() {
         {(error || message) && (
           <div className={error ? 'notice error' : 'notice'}>
             <span>{error || message}</span>
-            <button type="button" onClick={() => { setError(null); setMessage(null) }}>x</button>
+            <button type="button" aria-label="关闭提示" onClick={() => { setError(null); setMessage(null) }}>
+              <CloseIcon size={14} />
+            </button>
           </div>
         )}
 
@@ -807,9 +830,9 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
   if (!job) {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">下载 HTML</span>
-        <span className="job-report-action-link disabled" aria-disabled="true">下载 PDF</span>
-        <a className="job-report-action-link" href="#/history">返回项目历史</a>
+        <span className="job-report-action-link disabled" aria-disabled="true"><ClockIcon size={14} />下载 HTML</span>
+        <span className="job-report-action-link disabled" aria-disabled="true"><ClockIcon size={14} />下载 PDF</span>
+        <a className="job-report-action-link" href="#/history"><ArrowLeftIcon size={14} />返回项目历史</a>
       </div>
     )
   }
@@ -818,25 +841,25 @@ function JobReportActions({ job }: { job: JobDetail | null }) {
     // result that is never coming. Say so plainly instead.
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">任务失败，无报告</span>
-        <a className="job-report-action-link" href="#/history">返回项目历史</a>
+        <span className="job-report-action-link disabled" aria-disabled="true"><WarningIcon size={14} />任务失败，无报告</span>
+        <a className="job-report-action-link" href="#/history"><ArrowLeftIcon size={14} />返回项目历史</a>
       </div>
     )
   }
   if (job.status !== 'done') {
     return (
       <div className="job-report-actions" aria-label="报告操作">
-        <span className="job-report-action-link disabled" aria-disabled="true">等待 HTML</span>
-        <span className="job-report-action-link disabled" aria-disabled="true">等待 PDF</span>
-        <a className="job-report-action-link" href="#/history">返回项目历史</a>
+        <span className="job-report-action-link disabled" aria-disabled="true"><ClockIcon size={14} />等待 HTML</span>
+        <span className="job-report-action-link disabled" aria-disabled="true"><ClockIcon size={14} />等待 PDF</span>
+        <a className="job-report-action-link" href="#/history"><ArrowLeftIcon size={14} />返回项目历史</a>
       </div>
     )
   }
   return (
     <div className="job-report-actions" aria-label="报告操作">
-      <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}>下载 HTML</a>
-      <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}>下载 PDF</a>
-      <a className="job-report-action-link" href="#/history">返回项目历史</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'html')} download={`AHCC-${job.job_id}.html`}><DownloadIcon size={14} />下载 HTML</a>
+      <a className="job-report-action-link" href={reportUrl(job.job_id, 'pdf')}><DownloadIcon size={14} />下载 PDF</a>
+      <a className="job-report-action-link" href="#/history"><ArrowLeftIcon size={14} />返回项目历史</a>
     </div>
   )
 }
@@ -1033,7 +1056,7 @@ function CockpitPage({
           <p className="visual-review-note">默认保证完成：先抽取全量文本层/表格层数值；智能/严格模式再按预算执行视觉 OCR。</p>
           <div className="file-row">
             <label className={`file-card ${invalidClass('aFile')}`}>
-              <span className="file-kicker">PDF</span>
+              <span className="file-kicker"><DocumentIcon size={14} />PDF</span>
               <strong>{upload.checkMode === 'h_bilingual' ? 'H 股中文报告' : 'A 股报告'}</strong>
               <small>{upload.aFile ? upload.aFile.name : '点击选择或拖入文件'}</small>
               <input
@@ -1053,7 +1076,7 @@ function CockpitPage({
               )}
             </label>
             <label className={`file-card ${invalidClass('hFile')}`}>
-              <span className="file-kicker">PDF</span>
+              <span className="file-kicker"><DocumentIcon size={14} />PDF</span>
               <strong>{upload.checkMode === 'h_bilingual' ? 'H 股英文报告' : 'H 股报告'}</strong>
               <small>{upload.hFile ? upload.hFile.name : '点击选择或拖入文件'}</small>
               <input
@@ -1079,7 +1102,17 @@ function CockpitPage({
             disabled={busy === 'job'}
             aria-busy={busy === 'job'}
           >
-            {busy === 'job' ? '正在生成核查任务' : '开始核查'}
+            {busy === 'job' ? (
+              <>
+                <SpinnerIcon size={15} className="spin" />
+                正在生成核查任务
+              </>
+            ) : (
+              <>
+                开始核查
+                <ArrowRightIcon size={15} />
+              </>
+            )}
           </button>
         </form>
 
@@ -1087,7 +1120,7 @@ function CockpitPage({
           <div className="command-section-head">
             <span>02</span>
             <div>
-              <h3>项目组最近核查</h3>
+              <h3><BuildingIcon size={16} />项目组最近核查</h3>
               <p>同组历史在这里连续展示，方便回到上一次证据复核。</p>
             </div>
           </div>
@@ -1153,7 +1186,7 @@ function MissingJobFallback({
   return (
     <section className="missing-job-panel">
       <div>
-        <p className="eyebrow">Job Recovery</p>
+        <p className="eyebrow"><WarningIcon size={12} />Job Recovery</p>
         <h2>任务不在当前环境存储中</h2>
         <p>
           任务 {jobId || '—'} 未在当前 Zeabur 存储中找到。通常是部署重建前没有挂载持久化卷，
@@ -1176,10 +1209,13 @@ function MissingJobFallback({
       )}
       <div className="missing-job-actions">
         {latestJob && (
-          <a className="primary" href={`#/jobs/${latestJob.job_id}`}>打开最新完成任务</a>
+          <a className="primary" href={`#/jobs/${latestJob.job_id}`}>
+            打开最新完成任务
+            <ArrowRightIcon size={15} />
+          </a>
         )}
-        <a className="ghost" href="#/cockpit">重新上传 PDF</a>
-        <a className="ghost" href="#/history">查看项目历史</a>
+        <a className="ghost" href="#/cockpit"><UploadIcon size={15} />重新上传 PDF</a>
+        <a className="ghost" href="#/history"><ClockIcon size={15} />查看项目历史</a>
       </div>
     </section>
   )
@@ -1561,7 +1597,7 @@ function ProfilePage({
       <form className="panel" onSubmit={submitProfile}>
         <div className="panel-head">
           <div>
-            <p className="eyebrow">当前用户</p>
+            <p className="eyebrow"><UserIcon size={12} />当前用户</p>
             <h2>{session?.user.display_name || 'Chu, Stanley'}</h2>
             <p className="panel-copy">更新当前演示用户的展示信息，导航栏会同步显示。</p>
           </div>
@@ -1593,6 +1629,7 @@ function ProfilePage({
           />
         </label>
         <button className="primary" type="submit" disabled={busy === 'profile'}>
+          {busy === 'profile' ? <SpinnerIcon size={15} className="spin" /> : <CheckIcon size={15} />}
           {busy === 'profile' ? '正在保存' : '保存资料'}
         </button>
       </form>
@@ -1616,6 +1653,7 @@ function ProfilePage({
         </label>
         <p className="file-name">{avatarFile ? avatarFile.name : '请选择 PNG、JPG 或 WEBP 文件'}</p>
         <button className="primary" type="submit" disabled={busy === 'avatar'}>
+          {busy === 'avatar' ? <SpinnerIcon size={15} className="spin" /> : <UploadIcon size={15} />}
           {busy === 'avatar' ? '正在上传' : '上传头像'}
         </button>
       </form>
@@ -1740,7 +1778,7 @@ function EvidenceDialog({ diff, job, onClose }: { diff: DiffItem; job: JobDetail
             >
               定位列表
             </button>
-            <button type="button" className="ghost" onClick={onClose}>关闭</button>
+            <button type="button" className="ghost" onClick={onClose}><CloseIcon size={14} />关闭</button>
           </div>
         </header>
 

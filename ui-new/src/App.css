@@ -163,11 +163,29 @@ h3 {
 .severity {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 28px;
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.api-status svg {
+  flex: 0 0 auto;
+}
+
+svg.spin {
+  animation: iconSpin 0.9s linear infinite;
+}
+
+@keyframes iconSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .api-status {
@@ -279,6 +297,10 @@ a:focus-visible {
 }
 
 .segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   color: var(--muted);
   background: transparent;
 }
@@ -614,7 +636,12 @@ small {
 }
 
 .notice button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
   border: 0;
+  border-radius: 999px;
   background: transparent;
   cursor: pointer;
   font-weight: 900;
@@ -914,11 +941,18 @@ small {
 }
 
 .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--navy);
   font-size: 12px;
   font-weight: 780;
   letter-spacing: 0.08em;
   text-transform: none;
+}
+
+.eyebrow svg {
+  flex: 0 0 auto;
 }
 
 h1 {
@@ -1083,8 +1117,10 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
+  gap: 5px;
+  min-width: 42px;
   height: 30px;
+  padding: 0 10px;
   color: var(--navy);
   border: 1px solid rgba(0, 51, 141, 0.16);
   border-radius: 8px;
@@ -1094,6 +1130,10 @@ a:focus-visible {
 }
 
 .primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 42px;
   background: var(--navy);
   box-shadow: 0 10px 24px rgba(0, 51, 141, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
@@ -1168,7 +1208,8 @@ a:focus-visible {
   .shake-0.field-invalid,
   .shake-1.field-invalid,
   .field-error,
-  .ticker-track {
+  .ticker-track,
+  svg.spin {
     animation: none;
   }
 
@@ -1613,6 +1654,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   min-height: 34px;
   padding: 7px 12px;
   border: 1px solid rgba(18, 38, 63, 0.12);
@@ -1939,7 +1981,15 @@ body {
 }
 
 .command-section-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 18px;
+}
+
+.command-section-head h3 svg {
+  flex: 0 0 auto;
+  color: var(--navy);
 }
 
 .command-section-head p {
