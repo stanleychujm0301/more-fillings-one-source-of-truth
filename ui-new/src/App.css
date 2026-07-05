@@ -4,18 +4,6 @@
   min-height: 100vh;
 }
 
-.side {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-height: 100vh;
-  padding: 24px 18px;
-  color: #fff;
-  background:
-    linear-gradient(180deg, rgba(0, 163, 224, 0.16), transparent 34%),
-    var(--kpmg-deep);
-}
-
 .brand {
   display: grid;
   gap: 14px;
@@ -57,8 +45,7 @@
 
 .nav a,
 .user-strip,
-.ghost,
-.detail-actions a {
+.ghost {
   text-decoration: none;
 }
 
@@ -157,7 +144,6 @@ h3 {
 }
 
 .api-status,
-.team-pill,
 .mode-chip,
 .status,
 .severity {
@@ -193,7 +179,6 @@ svg.spin {
   background: #e0f2fe;
 }
 
-.team-pill,
 .mode-chip {
   color: var(--kpmg-blue);
   background: var(--surface-soft);
@@ -222,10 +207,6 @@ svg.spin {
   box-shadow: var(--shadow);
 }
 
-.launch-panel {
-  border-color: rgba(0, 51, 141, 0.28);
-  background: linear-gradient(180deg, #fff, #f7fbff);
-}
 
 .panel-head {
   display: flex;
@@ -332,17 +313,13 @@ a:focus-visible {
   font-weight: 800;
 }
 
-.job-list,
-.diff-list,
-.evidence-list {
+.job-list {
   display: grid;
   gap: 10px;
 }
 
 .job-row,
-.history-row,
-.diff-row,
-.evidence-item {
+.history-row {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -481,65 +458,6 @@ small {
 .status.running {
   color: #075985;
   background: #e0f2fe;
-}
-
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
-  gap: 12px;
-}
-
-.metric {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.metric span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.metric strong {
-  font-size: 24px;
-}
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.detail-actions a {
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--kpmg-blue);
-  font-weight: 800;
-  background: #fff;
-}
-
-.diff-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px;
-}
-
-.diff-row div {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-}
-
-.diff-row p {
-  color: var(--muted);
-  line-height: 1.45;
 }
 
 .severity {
@@ -683,56 +601,9 @@ small {
   margin-top: 4px;
 }
 
-.dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(3, 10, 28, 0.62);
-}
-
-.dialog {
-  width: min(760px, 100%);
-  max-height: min(720px, 90vh);
-  overflow: auto;
-  padding: 20px;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.28);
-}
-
-.dialog-summary {
-  margin-bottom: 14px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.evidence-item {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-}
-
-.evidence-item span {
-  color: var(--kpmg-blue);
-  font-weight: 800;
-}
-
-.evidence-item p {
-  color: var(--ink);
-  line-height: 1.5;
-}
-
 @media (max-width: 980px) {
   .shell {
     display: block;
-  }
-
-  .side {
-    min-height: auto;
-    padding: 14px;
   }
 
   .brand {
@@ -757,8 +628,7 @@ small {
   }
 
   .topbar,
-  .panel-head,
-  .diff-row {
+  .panel-head {
     flex-direction: column;
     align-items: stretch;
   }
@@ -769,8 +639,7 @@ small {
 
   .two-col,
   .profile-grid,
-  .file-row,
-  .metric-grid {
+  .file-row {
     grid-template-columns: 1fr;
   }
 
@@ -1008,10 +877,6 @@ h3 {
   backdrop-filter: blur(14px);
 }
 
-.launch-panel {
-  border-color: rgba(0, 51, 141, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 255, 0.9));
-}
 
 .panel-copy {
   max-width: 58ch;
@@ -1148,7 +1013,7 @@ a:focus-visible {
   padding: 0 10px;
   color: var(--navy);
   border: 1px solid rgba(0, 51, 141, 0.16);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #fff;
   font-size: 11px;
   font-weight: 820;
@@ -1310,23 +1175,18 @@ a:focus-visible {
   }
 }
 
-.ghost,
-.detail-actions a {
+.ghost {
   color: var(--navy);
   border-color: rgba(18, 38, 63, 0.12);
   background: rgba(255, 255, 255, 0.86);
 }
 
-.ghost:hover,
-.detail-actions a:hover {
+.ghost:hover {
   background: rgba(238, 245, 255, 0.9);
 }
 
 .job-row,
-.history-row,
-.diff-row,
-.evidence-item,
-.metric {
+.history-row {
   border-color: rgba(18, 38, 63, 0.1);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.78);
@@ -1368,26 +1228,10 @@ a:focus-visible {
   background: rgba(224, 242, 254, 0.92);
 }
 
-.team-pill,
 .mode-chip {
   color: var(--navy);
   border: 1px solid rgba(0, 51, 141, 0.1);
   background: rgba(238, 245, 255, 0.86);
-}
-
-.metric {
-  gap: 7px;
-  background: rgba(248, 250, 252, 0.78);
-}
-
-.metric span {
-  color: #667085;
-}
-
-.metric strong {
-  color: #0d1520;
-  font-size: 28px;
-  line-height: 1;
 }
 
 .severity {
@@ -1435,18 +1279,6 @@ a:focus-visible {
   text-align: center;
 }
 
-.dialog-backdrop {
-  background: rgba(13, 21, 32, 0.48);
-  backdrop-filter: blur(10px);
-}
-
-.dialog {
-  border: 1px solid rgba(255, 255, 255, 0.64);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 28px 90px rgba(13, 21, 32, 0.28);
-}
-
 @media (max-width: 1180px) {
   .app-toolbar {
     grid-template-columns: 1fr;
@@ -1481,16 +1313,14 @@ a:focus-visible {
   }
 
   .topbar,
-  .panel-head,
-  .diff-row {
+  .panel-head {
     flex-direction: column;
     align-items: stretch;
   }
 
   .two-col,
   .profile-grid,
-  .file-row,
-  .metric-grid {
+  .file-row {
     grid-template-columns: 1fr;
   }
 }
@@ -1586,13 +1416,10 @@ a:focus-visible {
   --page-max-width: 1440px;
   --page-gutter: clamp(14px, 2.2vw, 28px);
   --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-strong: rgba(255, 255, 255, 0.92);
   /* --hairline and the two shadow decks are now owned by index.css's token layer
      (--hairline, --shadow-rest/--shadow-float aliased through --soft-shadow /
      --floating-shadow) — not redeclared here so that layer stays authoritative. */
-  --hairline-strong: rgba(0, 51, 141, 0.18);
   --surface-radius: var(--radius-lg);
-  --control-radius: var(--radius-md);
 }
 
 body {
@@ -2123,39 +1950,6 @@ body {
 .file-card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 250, 252, 0.72));
-}
-
-.rich-diff-row {
-  align-items: flex-start;
-  padding: 16px;
-}
-
-.diff-main {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.diff-badges,
-.diff-meta-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-}
-
-.diff-meta-line {
-  color: #667085;
-  font-size: 12px;
-}
-
-.diff-meta-line span {
-  display: inline-flex;
-  min-height: 25px;
-  padding: 4px 8px;
-  border: 1px solid rgba(18, 38, 63, 0.08);
-  border-radius: 999px;
-  background: rgba(248, 250, 252, 0.78);
 }
 
 .triage,
@@ -3321,9 +3115,6 @@ body {
   padding: 18px;
 }
 
-.dense-actions {
-  margin: 0 0 12px;
-}
 
 .diff-drilldown-board {
   display: grid;
@@ -3597,17 +3388,12 @@ body {
   --surface-bg: rgba(255, 255, 255, 0.82);
   --surface-bg-strong: rgba(255, 255, 255, 0.94);
   --surface-shadow: var(--shadow-rest);
-  --surface-shadow-hover: 0 22px 58px rgba(16, 34, 71, 0.13);
   --card-accent: var(--navy);
   --focus-ring: 0 0 0 4px rgba(0, 163, 224, 0.18);
   --motion-fast: 160ms cubic-bezier(0.2, 0, 0, 1);
-  --motion-soft: 220ms cubic-bezier(0.2, 0, 0, 1);
   --status-success-bg: rgba(223, 246, 229, 0.9);
   --status-success-text: #166534;
-  --status-warning-bg: rgba(255, 246, 214, 0.92);
   --status-danger-bg: rgba(255, 237, 213, 0.92);
-  --text-strong: var(--ink);
-  --text-muted: var(--muted);
 }
 
 html {
@@ -3675,7 +3461,10 @@ html {
 
 .ghost:hover,
 .job-report-action-link:hover {
-  color: var(--navy);
+  /* --cobalt: a brighter, "livelier" blue than --navy reserved for interactive/hover
+     states, so hovered controls read as active rather than just restating the brand
+     color. */
+  color: var(--cobalt);
   border-color: rgba(0, 51, 141, 0.18);
   background: rgba(238, 245, 255, 0.92);
 }
