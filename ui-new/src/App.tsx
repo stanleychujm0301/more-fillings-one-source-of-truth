@@ -1164,12 +1164,12 @@ function HistoryPage({
       <div className="history-table">
         <div className="history-head">
           <span>核查任务</span>
-          <span>核查模式</span>
-          <span>提交人</span>
-          <span>状态</span>
-          <span>真实差异</span>
-          <span>检查时间</span>
-          <span>核查耗时</span>
+          <div className="history-head-stats">
+            <span>状态</span>
+            <span>真实差异</span>
+            <span>检查时间</span>
+            <span>核查耗时</span>
+          </div>
         </div>
         {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : (
           <EmptyState label="暂无项目历史" ctaHref="#/cockpit" ctaLabel="去核查工作台新建任务" />
@@ -1679,16 +1679,29 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
     const detailLabel = historyProgressLabel(item) || visualOcrStatusLabel(summary)
     return (
       <a className="history-row" href={`#/jobs/${item.job_id}`}>
-        <span>
+        <div className="history-row-main">
           <strong>{item.company_name || item.job_id}</strong>
           {detailLabel ? <small>{detailLabel}</small> : null}
-        </span>
-        <span>{modeLabel(item.check_mode)}</span>
-        <span>{item.owner_display_name || 'Chu, Stanley'}</span>
-        <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
-        <span>{metric(summary, 'real_diff_count')}</span>
-        <span>{formatDate(item.started_at)}</span>
-        <span>{formatDuration(item.duration_seconds)}</span>
+          <div className="history-row-meta-line">
+            <span className="mode-chip">{modeLabel(item.check_mode)}</span>
+            <span>{item.owner_display_name || 'Chu, Stanley'}</span>
+          </div>
+        </div>
+        <div className="history-row-stats">
+          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+          <span className="stat">
+            <small>真实差异</small>
+            <strong>{metric(summary, 'real_diff_count')}</strong>
+          </span>
+          <span className="stat">
+            <small>检查时间</small>
+            <strong>{formatDate(item.started_at)}</strong>
+          </span>
+          <span className="stat">
+            <small>核查耗时</small>
+            <strong>{formatDuration(item.duration_seconds)}</strong>
+          </span>
+        </div>
       </a>
     )
   }
