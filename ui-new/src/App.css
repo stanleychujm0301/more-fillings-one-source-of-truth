@@ -2584,38 +2584,40 @@ body {
 
 .stage-stepper {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0;
-  margin: 0;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .stage-step {
   position: relative;
-  display: inline-flex;
-  flex: 1 1 auto;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  min-height: 26px;
-  min-width: 96px;
-  padding: 4px 14px 4px 0;
+  gap: 8px;
+  min-width: 72px;
+  padding: 0;
   color: #667085;
   font-size: 12px;
   font-weight: 760;
+  line-height: 1.35;
+  text-align: center;
 }
 
-/* Hairline rail connecting each dot to the next — done segments switch to the accent
-   color so the stepper reads as a filling progress rail, not just isolated badges. */
+/* Connector rail sits between dots only, never touching labels. */
 .stage-step:not(:last-child)::after {
   position: absolute;
-  top: 50%;
-  left: 15px;
-  right: -2px;
+  top: 7px;
+  left: calc(50% + 8px);
+  right: calc(-50% + 8px);
   height: 2px;
   background: var(--hairline);
   content: "";
-  transform: translateY(-50%);
+  z-index: 0;
 }
 
 .stage-step.done:not(:last-child)::after {
@@ -2629,12 +2631,12 @@ body {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: rgba(102, 112, 133, 0.45);
   color: transparent;
-  transition: width 0.2s ease, height 0.2s ease, background 0.2s ease;
+  transition: background 0.2s ease, transform 0.2s ease;
 }
 
 .stage-step.active .stage-dot {
@@ -2652,8 +2654,6 @@ body {
 }
 
 .stage-step.done .stage-dot {
-  width: 15px;
-  height: 15px;
   color: #fff;
   background: var(--green);
 }
