@@ -1162,15 +1162,6 @@ function HistoryPage({
         </div>
       </div>
       <div className="history-table">
-        <div className="history-head">
-          <span>核查任务</span>
-          <div className="history-head-stats">
-            <span>状态</span>
-            <span>真实差异</span>
-            <span>检查时间</span>
-            <span>核查耗时</span>
-          </div>
-        </div>
         {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : (
           <EmptyState label="暂无项目历史" ctaHref="#/cockpit" ctaLabel="去核查工作台新建任务" />
         )}

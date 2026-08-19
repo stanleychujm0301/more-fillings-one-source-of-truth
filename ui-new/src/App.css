@@ -388,60 +388,31 @@ small {
 }
 
 .history-table {
-  overflow-x: auto;
-}
-
-.history-head,
-.history-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 24px;
-  align-items: center;
-  min-width: 0;
+  overflow-x: visible;
 }
 
 .history-head {
-  padding: 0 18px 11px;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 880;
-  line-height: 1.2;
+  display: none;
 }
 
 .history-row {
-  margin-bottom: 8px;
-  padding: 14px 18px;
-  text-decoration: none;
-}
-
-.history-head > span:first-child,
-.history-row-main {
-  min-width: 0;
-}
-
-.history-head-stats,
-.history-row-stats {
-  display: grid;
-  grid-template-columns: 84px 100px 150px 104px;
-  gap: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: center;
-}
-
-.history-head-stats {
-  text-align: right;
-}
-
-/* On desktop the grouping wrappers are transparent so their children align
-   with the four fixed-width header columns. */
-.history-row-stats-primary,
-.history-row-stats-secondary {
-  display: contents;
+  gap: 20px;
+  margin-bottom: 10px;
+  padding: 16px 20px;
+  text-decoration: none;
 }
 
 .history-row-main {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
+  min-width: 260px;
+  max-width: 460px;
 }
 
 .history-row-main > strong {
@@ -455,11 +426,18 @@ small {
 .history-row-main > small {
   color: var(--muted);
   font-size: 12px;
+  white-space: normal;
+}
+
+.history-row .status {
+  display: inline-flex;
+  flex-shrink: 0;
 }
 
 .history-row-meta-line {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
@@ -469,10 +447,25 @@ small {
   flex: 0 0 auto;
 }
 
+.history-row-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 28px;
+}
+
+.history-row-stats-primary,
+.history-row-stats-secondary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 28px;
+}
+
 .history-row-stats .stat {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 2px;
 }
 
@@ -488,33 +481,23 @@ small {
   white-space: nowrap;
 }
 
-.history-row .status {
-  justify-self: end;
+.history-row-stats .stat-diff {
+  min-width: 72px;
 }
 
-@media (max-width: 720px) {
-  .history-head-stats,
-  .history-row-stats {
-    grid-template-columns: 76px 88px 132px 92px;
-    gap: 12px;
-  }
+.history-row-stats .stat-time {
+  min-width: 150px;
+}
+
+.history-row-stats .stat-duration {
+  min-width: 80px;
 }
 
 @media (max-width: 620px) {
-  .history-table {
-    overflow-x: visible;
-  }
-
-  .history-head {
-    display: none;
-  }
-
   .history-row {
-    display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 14px;
-    min-width: 0;
     padding: 16px;
   }
 
@@ -527,20 +510,13 @@ small {
   }
 
   .history-row-stats {
-    display: flex;
     flex-direction: column;
     gap: 12px;
     width: 100%;
   }
 
-  /* Re-enable grouping wrappers on mobile. */
   .history-row-stats-primary,
   .history-row-stats-secondary {
-    display: flex;
-    align-items: center;
-  }
-
-  .history-row-stats-primary {
     gap: 16px;
   }
 
@@ -565,10 +541,6 @@ small {
     font-size: 20px;
     font-weight: 800;
     color: var(--navy);
-  }
-
-  .history-row .status {
-    justify-self: start;
   }
 }
 
