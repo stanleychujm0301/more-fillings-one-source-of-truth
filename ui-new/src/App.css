@@ -408,24 +408,40 @@ small {
   line-height: 1.2;
 }
 
-.history-head-stats {
-  display: grid;
-  grid-template-columns: auto 80px 120px 92px;
-  gap: 16px;
-  text-align: right;
-}
-
 .history-row {
   margin-bottom: 8px;
   padding: 14px 18px;
   text-decoration: none;
 }
 
+.history-head > span:first-child,
+.history-row-main {
+  min-width: 0;
+}
+
+.history-head-stats,
+.history-row-stats {
+  display: grid;
+  grid-template-columns: 84px 100px 150px 104px;
+  gap: 16px;
+  align-items: center;
+}
+
+.history-head-stats {
+  text-align: right;
+}
+
+/* On desktop the grouping wrappers are transparent so their children align
+   with the four fixed-width header columns. */
+.history-row-stats-primary,
+.history-row-stats-secondary {
+  display: contents;
+}
+
 .history-row-main {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 0;
 }
 
 .history-row-main > strong {
@@ -453,13 +469,6 @@ small {
   flex: 0 0 auto;
 }
 
-.history-row-stats {
-  display: grid;
-  grid-template-columns: auto 80px 120px 92px;
-  gap: 16px;
-  align-items: center;
-}
-
 .history-row-stats .stat {
   display: flex;
   flex-direction: column;
@@ -484,13 +493,9 @@ small {
 }
 
 @media (max-width: 720px) {
-  .history-head-stats {
-    grid-template-columns: auto 72px 108px 84px;
-    gap: 12px;
-  }
-
+  .history-head-stats,
   .history-row-stats {
-    grid-template-columns: auto 72px 108px 84px;
+    grid-template-columns: 76px 88px 132px 92px;
     gap: 12px;
   }
 }
@@ -505,18 +510,61 @@ small {
   }
 
   .history-row {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
     min-width: 0;
+    padding: 16px;
+  }
+
+  .history-row-main > strong {
+    white-space: normal;
+  }
+
+  .history-row-meta-line {
+    justify-content: space-between;
   }
 
   .history-row-stats {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+  }
+
+  /* Re-enable grouping wrappers on mobile. */
+  .history-row-stats-primary,
+  .history-row-stats-secondary {
+    display: flex;
+    align-items: center;
+  }
+
+  .history-row-stats-primary {
+    gap: 16px;
+  }
+
+  .history-row-stats-secondary {
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hairline);
   }
 
   .history-row-stats .stat {
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .history-row-stats .stat strong {
+    font-size: 14px;
+  }
+
+  .history-row-stats .stat-diff strong {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--navy);
   }
 
   .history-row .status {

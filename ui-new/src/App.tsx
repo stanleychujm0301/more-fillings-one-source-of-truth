@@ -1688,19 +1688,23 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
           </div>
         </div>
         <div className="history-row-stats">
-          <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
-          <span className="stat">
-            <small>真实差异</small>
-            <strong>{metric(summary, 'real_diff_count')}</strong>
-          </span>
-          <span className="stat">
-            <small>检查时间</small>
-            <strong>{formatDate(item.started_at)}</strong>
-          </span>
-          <span className="stat">
-            <small>核查耗时</small>
-            <strong>{formatDuration(item.duration_seconds)}</strong>
-          </span>
+          <div className="history-row-stats-primary">
+            <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+            <span className="stat stat-diff">
+              <small>真实差异</small>
+              <strong>{metric(summary, 'real_diff_count')}</strong>
+            </span>
+          </div>
+          <div className="history-row-stats-secondary">
+            <span className="stat stat-time">
+              <small>检查时间</small>
+              <strong>{formatDate(item.started_at)}</strong>
+            </span>
+            <span className="stat stat-duration">
+              <small>核查耗时</small>
+              <strong>{formatDuration(item.duration_seconds)}</strong>
+            </span>
+          </div>
         </div>
       </a>
     )
