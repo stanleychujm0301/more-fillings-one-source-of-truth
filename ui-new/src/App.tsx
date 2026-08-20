@@ -1207,6 +1207,13 @@ function HistoryPage({
         />
       </div>
 
+      <div className="history-head">
+        <span>项目</span>
+        <span>状态</span>
+        <span>真实差异</span>
+        <span>检查时间</span>
+        <span>核查耗时</span>
+      </div>
       <div className="history-table">
         {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : (
           <EmptyState label="暂无项目历史" ctaHref="#/cockpit" ctaLabel="去核查工作台新建任务" />
@@ -1724,25 +1731,19 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
             <span>{item.owner_display_name || 'Chu, Stanley'}</span>
           </div>
         </div>
-        <div className="history-row-stats">
-          <div className="history-row-stats-primary">
-            <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
-            <span className="stat stat-diff">
-              <small>真实差异</small>
-              <strong>{metric(summary, 'real_diff_count')}</strong>
-            </span>
-          </div>
-          <div className="history-row-stats-secondary">
-            <span className="stat stat-time">
-              <small>检查时间</small>
-              <strong>{formatDate(item.started_at)}</strong>
-            </span>
-            <span className="stat stat-duration">
-              <small>核查耗时</small>
-              <strong>{formatDuration(item.duration_seconds)}</strong>
-            </span>
-          </div>
-        </div>
+        <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>
+        <span className="stat stat-diff">
+          <small>真实差异</small>
+          <strong>{metric(summary, 'real_diff_count')}</strong>
+        </span>
+        <span className="stat stat-time">
+          <small>检查时间</small>
+          <strong>{formatDate(item.started_at)}</strong>
+        </span>
+        <span className="stat stat-duration">
+          <small>核查耗时</small>
+          <strong>{formatDuration(item.duration_seconds)}</strong>
+        </span>
       </a>
     )
   }
