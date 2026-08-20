@@ -645,7 +645,37 @@ small {
 }
 
 .profile-grid .primary {
-  margin-top: auto;
+  margin-top: 14px;
+}
+
+.profile-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+.profile-section .eyebrow {
+  margin-bottom: 12px;
+}
+
+.profile-section label {
+  margin-bottom: 10px;
+}
+
+.profile-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.profile-meta-grid input[readonly] {
+  color: var(--muted);
+  background: var(--surface-soft);
+  cursor: default;
+}
+
+.profile-role-badge {
+  margin-top: 12px;
 }
 
 .notice {
