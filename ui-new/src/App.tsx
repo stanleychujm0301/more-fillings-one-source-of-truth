@@ -289,9 +289,9 @@ const DEFAULT_USER_LABEL = 'Chu, Stanley (SH/FS3)'
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/+$/, '')
 const EMPTY_UPLOAD: UploadState = {
   companyName: '',
-  checkMode: (localStorage.getItem('ahcc.defaultCheckMode') as UploadState['checkMode']) || 'ah',
+  checkMode: 'ah',
   bilingualLevel: 'fast',
-  visualReviewMode: (localStorage.getItem('ahcc.defaultVisualMode') as UploadState['visualReviewMode']) || 'off',
+  visualReviewMode: 'off',
   aFile: null,
   hFile: null,
 }
@@ -1648,21 +1648,6 @@ function ProfilePage({
   submitProfile: (event: FormEvent<HTMLFormElement>) => void
   submitAvatar: (event: FormEvent<HTMLFormElement>) => void
 }) {
-  const [defaultCheckMode, setDefaultCheckMode] = useState<UploadState['checkMode']>(
-    () => (localStorage.getItem('ahcc.defaultCheckMode') as UploadState['checkMode']) || 'ah'
-  )
-  const [defaultVisualMode, setDefaultVisualMode] = useState<UploadState['visualReviewMode']>(
-    () => (localStorage.getItem('ahcc.defaultVisualMode') as UploadState['visualReviewMode']) || 'off'
-  )
-
-  useEffect(() => {
-    localStorage.setItem('ahcc.defaultCheckMode', defaultCheckMode)
-  }, [defaultCheckMode])
-
-  useEffect(() => {
-    localStorage.setItem('ahcc.defaultVisualMode', defaultVisualMode)
-  }, [defaultVisualMode])
-
   return (
     <section className="grid two-col profile-grid">
       <form className="panel" onSubmit={submitProfile}>
@@ -1699,62 +1684,6 @@ function ProfilePage({
             maxLength={80}
           />
         </label>
-
-        <div className="profile-section">
-          <p className="eyebrow">账户信息</p>
-          <div className="profile-meta-grid">
-            <label>
-              用户 ID
-              <input value={session?.user.user_id || '—'} readOnly />
-            </label>
-            <label>
-              项目组
-              <input value={session?.user.project_group?.name || '—'} readOnly />
-            </label>
-          </div>
-          <div className="profile-role-badge">
-            <span className="mode-chip">{draft.role_title || session?.user.role_title || '未设置角色'}</span>
-          </div>
-        </div>
-
-        <div className="profile-section">
-          <p className="eyebrow">默认设置</p>
-          <label>默认核查模式</label>
-          <div className="segmented">
-            <button
-              type="button"
-              className={defaultCheckMode === 'ah' ? 'selected' : ''}
-              onClick={() => setDefaultCheckMode('ah')}
-            >
-              A/H 股报告
-            </button>
-            <button
-              type="button"
-              className={defaultCheckMode === 'h_bilingual' ? 'selected' : ''}
-              onClick={() => setDefaultCheckMode('h_bilingual')}
-            >
-              H 股中英文
-            </button>
-          </div>
-
-          <label>默认视觉审核</label>
-          <div className="segmented">
-            {[
-              { key: 'off', label: '关闭' },
-              { key: 'smart', label: '智能' },
-              { key: 'strict', label: '严格' },
-            ].map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                className={defaultVisualMode === option.key ? 'selected' : ''}
-                onClick={() => setDefaultVisualMode(option.key as UploadState['visualReviewMode'])}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
 
         <button className="primary" type="submit" disabled={busy === 'profile'}>
           {busy === 'profile' ? <SpinnerIcon size={15} className="spin" /> : <CheckIcon size={15} />}
