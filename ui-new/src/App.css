@@ -635,13 +635,17 @@ small {
 }
 
 .profile-grid {
-  align-items: start;
+  align-items: stretch;
 }
 
 .profile-grid .panel {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+}
+
+.profile-grid .panel:not(.avatar-panel) {
+  justify-content: space-between;
 }
 
 .profile-grid .primary {
