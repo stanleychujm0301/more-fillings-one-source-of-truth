@@ -1148,6 +1148,25 @@ function HistoryPage({
   setScope: (scope: 'project' | 'mine') => void
   history: JobSummary[]
 }) {
+  const summary = useMemo(() => {
+    const done = history.filter((j) => j.status === 'done')
+    const failed = history.filter((j) => j.status === 'failed')
+    const realDiffs = history.reduce(
+      (sum, j) => sum + (Number(j.comparison_summary?.real_diff_count) || 0),
+      0
+    )
+    const avgDuration = done.length
+      ? done.reduce((sum, j) => sum + (j.duration_seconds || 0), 0) / done.length
+      : 0
+    return {
+      total: history.length,
+      done: done.length,
+      failed: failed.length,
+      realDiffs,
+      avgDuration,
+    }
+  }, [history])
+
   return (
     <section className="panel wide">
       <div className="panel-head">
@@ -1161,6 +1180,33 @@ function HistoryPage({
           <button type="button" className={scope === 'project' ? 'selected' : ''} onClick={() => setScope('project')}>项目组</button>
         </div>
       </div>
+
+      <div className="detail-kpi-grid history-summary">
+        <DashboardMetric
+          label="总核查数"
+          value={String(summary.total)}
+          note="当前列表范围内"
+          tone="accent"
+        />
+        <DashboardMetric
+          label="已完成"
+          value={String(summary.done)}
+          note={`${summary.failed} 个失败`}
+          tone={summary.failed > 0 ? 'warning' : 'accent'}
+        />
+        <DashboardMetric
+          label="真实差异"
+          value={String(summary.realDiffs)}
+          note="累计发现"
+          tone={summary.realDiffs > 0 ? 'critical' : 'accent'}
+        />
+        <DashboardMetric
+          label="平均耗时"
+          value={formatDuration(summary.avgDuration)}
+          note="已完成任务"
+        />
+      </div>
+
       <div className="history-table">
         {history.length ? history.map((item) => <JobRow key={item.job_id} item={item} table />) : (
           <EmptyState label="暂无项目历史" ctaHref="#/cockpit" ctaLabel="去核查工作台新建任务" />
