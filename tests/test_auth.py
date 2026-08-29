@@ -4,9 +4,9 @@ conftest 默认 AHCC_AUTH_DISABLED=1（存量测试旁路），本文件通过
 monkeypatch.setattr(settings, "auth_disabled", False) 显式打开真实认证路径。
 
 种子数据（models._seed_demo_accounts，密码均为 demo1234）：
-- chu-stanley：SH/FS3 + SH/IPO 专项（一人多组）
-- yu-jill：SH/FS3（stanley 的同组同事）
-- ni-andrew：BJ/FS1（异组，用于隔离验证）
+- stanleychu：SH/FS3 + SH/IPO 专项（一人多组）
+- demouser1：SH/FS3（stanley 的同组同事）
+- demouser2：BJ/FS1（异组，用于隔离验证）
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def test_register_duplicate_username_and_case_variant_conflict(auth_client):
     # 用户名大小写不敏感（user_id 统一小写）
     assert _register(auth_client, "NEW-Hire").status_code == 409
     # 与种子账号冲突
-    assert _register(auth_client, "Chu-Stanley").status_code == 409
+    assert _register(auth_client, "StanleyChu").status_code == 409
 
 
 def test_register_validation_errors(auth_client):
@@ -197,14 +197,14 @@ def test_register_create_new_group_auto_membership(auth_client):
 
 def test_login_success_failure_and_logout(auth_client):
     # 用户名大小写不敏感
-    ok = _login(auth_client, "CHU-Stanley")
+    ok = _login(auth_client, "StanleyChu")
     assert ok.status_code == 200
-    assert ok.json()["user"]["user_id"] == "chu-stanley"
+    assert ok.json()["user"]["user_id"] == "stanleychu"
     assert ok.json()["project_group"]["id"] == "sh-fs3"
     assert {m["group_id"] for m in ok.json()["memberships"]} == {"sh-fs3", "sh-ipo"}
 
     # 密码错误与用户名不存在统一 401 文案（防枚举）
-    bad_pw = _login(auth_client, "chu-stanley", "wrong-password")
+    bad_pw = _login(auth_client, "stanleychu", "wrong-password")
     no_user = _login(auth_client, "no-such-user")
     assert bad_pw.status_code == 401
     assert no_user.status_code == 401
@@ -238,7 +238,7 @@ def test_unauthenticated_requests_are_rejected(auth_client):
 
 
 def test_expired_session_is_rejected(auth_client):
-    assert _login(auth_client, "chu-stanley").status_code == 200
+    assert _login(auth_client, "stanleychu").status_code == 200
     assert auth_client.get("/api/session/current").status_code == 200
 
     with models.get_conn() as conn:
@@ -252,16 +252,16 @@ def test_expired_session_is_rejected(auth_client):
 
 
 def test_group_sharing_between_colleagues(auth_client):
-    _seed_job("stanley-job", "chu-stanley", "Chu, Stanley", "sh-fs3", "SH/FS3")
+    _seed_job("stanley-job", "stanleychu", "Chu, Stanley", "sh-fs3", "SH/FS3")
 
     # 提交人本人可见
-    assert _login(auth_client, "chu-stanley").status_code == 200
+    assert _login(auth_client, "stanleychu").status_code == 200
     project = auth_client.get("/api/jobs/history?scope=project&limit=10")
     assert "stanley-job" in {item["job_id"] for item in project.json()}
     auth_client.post("/api/auth/logout")
 
-    # 同组同事 yu-jill：项目组历史可见、详情可读
-    assert _login(auth_client, "yu-jill").status_code == 200
+    # 同组同事 demouser1：项目组历史可见、详情可读
+    assert _login(auth_client, "demouser1").status_code == 200
     project = auth_client.get("/api/jobs/history?scope=project&limit=10")
     assert {item["job_id"] for item in project.json()} == {"stanley-job"}
     assert project.json()[0]["owner_display_name"] == "Chu, Stanley"
@@ -272,10 +272,10 @@ def test_group_sharing_between_colleagues(auth_client):
 
 
 def test_cross_group_isolation(auth_client):
-    _seed_job("stanley-job", "chu-stanley", "Chu, Stanley", "sh-fs3", "SH/FS3")
+    _seed_job("stanley-job", "stanleychu", "Chu, Stanley", "sh-fs3", "SH/FS3")
     _seed_diff("stanley-diff", "stanley-job")
 
-    assert _login(auth_client, "ni-andrew").status_code == 200
+    assert _login(auth_client, "demouser2").status_code == 200
     # 历史为空
     assert auth_client.get("/api/jobs/history?scope=project&limit=10").json() == []
     # 详情 / diffs / 报告下载全部 404（不区分不存在与无权访问）
@@ -291,7 +291,7 @@ def test_cross_group_isolation(auth_client):
 
     # 同组同事可以正常 review，reviewed_by 默认当前登录用户
     auth_client.post("/api/auth/logout")
-    assert _login(auth_client, "yu-jill").status_code == 200
+    assert _login(auth_client, "demouser1").status_code == 200
     ok = auth_client.post("/api/reviews/", json={"diff_id": "stanley-diff", "status": "reviewed"})
     assert ok.status_code == 200
     with models.get_conn() as conn:
@@ -305,10 +305,10 @@ def test_cross_group_isolation(auth_client):
 
 
 def test_multi_group_switching_filters_views(auth_client):
-    _seed_job("fs3-job", "chu-stanley", "Chu, Stanley", "sh-fs3", "SH/FS3")
-    _seed_job("ipo-job", "chu-stanley", "Chu, Stanley", "sh-ipo", "SH/IPO 专项")
+    _seed_job("fs3-job", "stanleychu", "Chu, Stanley", "sh-fs3", "SH/FS3")
+    _seed_job("ipo-job", "stanleychu", "Chu, Stanley", "sh-ipo", "SH/IPO 专项")
 
-    assert _login(auth_client, "chu-stanley").status_code == 200
+    assert _login(auth_client, "stanleychu").status_code == 200
     # 默认激活 sh-fs3
     project = auth_client.get("/api/jobs/history?scope=project&limit=10")
     assert {item["job_id"] for item in project.json()} == {"fs3-job"}
@@ -330,7 +330,7 @@ def test_multi_group_switching_filters_views(auth_client):
 
 
 def test_switch_group_requires_membership(auth_client):
-    assert _login(auth_client, "chu-stanley").status_code == 200
+    assert _login(auth_client, "stanleychu").status_code == 200
     # 非成员 → 403
     denied = auth_client.post("/api/session/active-group", json={"group_id": "bj-fs1"})
     assert denied.status_code == 403
@@ -342,12 +342,12 @@ def test_switch_group_requires_membership(auth_client):
 
 
 def test_active_group_persists_across_sessions(auth_client):
-    assert _login(auth_client, "chu-stanley").status_code == 200
+    assert _login(auth_client, "stanleychu").status_code == 200
     assert auth_client.post("/api/session/active-group", json={"group_id": "sh-ipo"}).status_code == 200
     auth_client.post("/api/auth/logout")
 
     # 重新登录（新 session）：激活组回落到 profile 记录的上次激活组
-    relogin = _login(auth_client, "chu-stanley")
+    relogin = _login(auth_client, "stanleychu")
     assert relogin.status_code == 200
     assert relogin.json()["project_group"]["id"] == "sh-ipo"
 
@@ -356,7 +356,7 @@ def test_active_group_persists_across_sessions(auth_client):
 
 
 def test_join_group_is_idempotent_and_switches_active(auth_client):
-    assert _login(auth_client, "yu-jill").status_code == 200
+    assert _login(auth_client, "demouser1").status_code == 200
 
     first = auth_client.post("/api/groups/join", json={"mode": "join", "group_id": "sh-ipo"})
     assert first.status_code == 200
@@ -384,7 +384,7 @@ def test_join_group_is_idempotent_and_switches_active(auth_client):
 
 
 def test_join_group_create_mode(auth_client):
-    assert _login(auth_client, "ni-andrew").status_code == 200
+    assert _login(auth_client, "demouser2").status_code == 200
     created = auth_client.post("/api/groups/join", json={"mode": "create", "group_name": "GZ/FS2"})
     assert created.status_code == 200
     assert created.json()["already_member"] is False
@@ -444,7 +444,7 @@ def test_legacy_users_without_memberships_are_backfilled(auth_client, monkeypatc
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             ("legacy-user", "Legacy User", "SH/FS3", "Audit Associate", "", "sh-fs3", "SH/FS3", ""),
         )
-        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("yu-jill",))
+        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("demouser1",))
         conn.commit()
 
     models.init_db()  # 重跑 schema 链条（init_db 不受 once-per-path 守卫限制）
@@ -452,21 +452,25 @@ def test_legacy_users_without_memberships_are_backfilled(auth_client, monkeypatc
     with models.get_conn() as conn:
         rows = conn.execute(
             "SELECT user_id, group_id FROM user_group_memberships WHERE user_id IN (?, ?) ORDER BY user_id",
-            ("legacy-user", "yu-jill"),
+            ("legacy-user", "demouser1"),
         ).fetchall()
     assert [(row["user_id"], row["group_id"]) for row in rows] == [
+        ("demouser1", "sh-fs3"),
         ("legacy-user", "sh-fs3"),
-        ("yu-jill", "sh-fs3"),
     ]
 
 
 def test_renamed_demo_accounts_migrate_in_place(auth_client):
-    """演示账号改名（chen-yiran→yu-jill、zhang-wei→ni-andrew）：老库里的旧账号必须
-    就地改名并带走其数据，而不是与新账号并存——否则项目组成员数翻倍。"""
+    """演示账号改名：老库里的旧账号必须就地改名并带走其数据，而不是与新账号并存
+    ——否则项目组成员数翻倍。
+
+    这里同时覆盖**多跳链式改名**：最老的 chen-yiran 要连过两跳
+    （chen-yiran → yu-jill → demouser1）才能落到当前 ID，验证
+    _RENAMED_DEMO_ACCOUNTS 的“旧跳在前”顺序约定确实生效。"""
     # 构造改名前的老库：删掉新账号，插回旧账号 + membership + 一条其名下的任务
     with models.get_conn() as conn:
-        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("yu-jill",))
-        conn.execute("DELETE FROM user_profiles WHERE user_id = ?", ("yu-jill",))
+        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("demouser1",))
+        conn.execute("DELETE FROM user_profiles WHERE user_id = ?", ("demouser1",))
         conn.execute(
             """INSERT INTO user_profiles
             (user_id, display_name, office_line, role_title, avatar_path,
@@ -488,7 +492,7 @@ def test_renamed_demo_accounts_migrate_in_place(auth_client):
             "SELECT 1 FROM user_profiles WHERE user_id = ?", ("chen-yiran",)
         ).fetchone()
         new = conn.execute(
-            "SELECT display_name, office_line FROM user_profiles WHERE user_id = ?", ("yu-jill",)
+            "SELECT display_name, office_line FROM user_profiles WHERE user_id = ?", ("demouser1",)
         ).fetchone()
         membership_users = [
             row["user_id"]
@@ -505,12 +509,12 @@ def test_renamed_demo_accounts_migrate_in_place(auth_client):
     assert new["display_name"] == "Yu, Jill"
     assert new["office_line"] == "SH/FS3"
     # SH/FS3 仍是两人（stanley + jill），没有因改名多出一个成员
-    assert membership_users == ["chu-stanley", "yu-jill"]
+    assert membership_users == ["demouser1", "stanleychu"]
     # 旧账号名下的任务跟着迁移，不会变成孤儿
-    assert job["owner_user_id"] == "yu-jill"
+    assert job["owner_user_id"] == "demouser1"
     assert job["owner_display_name"] == "Yu, Jill"
     # 改名后仍可用统一演示密码登录
-    assert _login(auth_client, "yu-jill").status_code == 200
+    assert _login(auth_client, "demouser1").status_code == 200
 
 
 # ── 7. 旁路一致性 ──────────────────────────────────────────────────────────
@@ -528,7 +532,7 @@ def test_auth_disabled_bypass_returns_contract_complete_session(monkeypatch, wor
 
     assert current.status_code == 200
     payload = current.json()
-    assert payload["user"]["user_id"] == "chu-stanley"
+    assert payload["user"]["user_id"] == "stanleychu"
     assert payload["project_group"]["id"] == "sh-fs3"
     # 旁路同样走 resolve_session_profile：memberships 契约不缺字段
     assert len(payload["memberships"]) >= 1

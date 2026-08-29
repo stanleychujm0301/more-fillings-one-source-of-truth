@@ -31,9 +31,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 
 | 用户名 | 姓名 | 角色 | 项目组 |
 |---|---|---|---|
-| `chu-stanley` | Chu, Stanley | Senior Manager | SH/FS3、SH/IPO 专项（一人多组，导航栏可切换） |
-| `yu-jill` | Yu, Jill | Audit Associate | SH/FS3（与 stanley 同组，可看到彼此的任务） |
-| `ni-andrew` | Ni, Andrew | Audit Manager | BJ/FS1（异组，看不到 SH/FS3 的任务） |
+| `stanleychu` | Chu, Stanley | Senior Manager | SH/FS3、SH/IPO 专项（一人多组，导航栏可切换） |
+| `demouser1` | Yu, Jill | Audit Associate | SH/FS3（与 stanley 同组，可看到彼此的任务） |
+| `demouser2` | Ni, Andrew | Audit Manager | BJ/FS1（异组，看不到 SH/FS3 的任务） |
 
 也可以在登录页直接注册新账号：选择加入已有项目组，或输入名称创建新项目组（创建者自动成为首个成员）。已登录用户可在「个人资料 → 我的项目组」中加入更多项目组，并通过导航栏左侧的项目组切换器切换当前视角。
 

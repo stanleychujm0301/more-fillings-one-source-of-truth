@@ -39,7 +39,7 @@ def test_init_db_seeds_demo_user_and_job_ownership_columns(monkeypatch, workspac
     with models.get_conn() as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-        user = conn.execute("SELECT * FROM user_profiles WHERE user_id = ?", ("chu-stanley",)).fetchone()
+        user = conn.execute("SELECT * FROM user_profiles WHERE user_id = ?", ("stanleychu",)).fetchone()
 
     assert "user_profiles" in tables
     assert {
@@ -68,7 +68,7 @@ def test_init_db_seeds_demo_accounts_groups_and_memberships(monkeypatch, workspa
 
     assert {"sessions", "project_groups", "user_group_memberships"} <= tables
     # 三个演示账号，密码哈希三要素齐备
-    assert [row["user_id"] for row in users] == ["chu-stanley", "ni-andrew", "yu-jill"]
+    assert [row["user_id"] for row in users] == ["demouser1", "demouser2", "stanleychu"]
     for row in users:
         assert row["password_hash"]
         assert row["password_salt"]
@@ -80,15 +80,15 @@ def test_init_db_seeds_demo_accounts_groups_and_memberships(monkeypatch, workspa
         ("sh-ipo", "SH/IPO 专项"),
     ]
     assert [(row["user_id"], row["group_id"]) for row in memberships] == [
-        ("chu-stanley", "sh-fs3"),
-        ("chu-stanley", "sh-ipo"),
-        ("ni-andrew", "bj-fs1"),
-        ("yu-jill", "sh-fs3"),
+        ("demouser1", "sh-fs3"),
+        ("demouser2", "bj-fs1"),
+        ("stanleychu", "sh-fs3"),
+        ("stanleychu", "sh-ipo"),
     ]
     # 种子密码可登录（大小写不敏感）
-    profile = repository.verify_user_credentials("CHU-Stanley", "demo1234")
+    profile = repository.verify_user_credentials("StanleyChu", "demo1234")
     assert profile is not None
-    assert profile["user_id"] == "chu-stanley"
+    assert profile["user_id"] == "stanleychu"
 
 
 def test_sqlite_connection_tolerates_locked_journal_pragma(monkeypatch, workspace_tmp):
@@ -256,10 +256,10 @@ def test_create_job_assigns_current_user_and_project(monkeypatch, workspace_tmp)
         )
 
     assert response.status_code == 200
-    assert response.json()["owner_user_id"] == "chu-stanley"
+    assert response.json()["owner_user_id"] == "stanleychu"
     assert response.json()["owner_display_name"] == "Chu, Stanley"
     assert response.json()["project_group_id"] == "sh-fs3"
-    assert saved[0].owner_user_id == "chu-stanley"
+    assert saved[0].owner_user_id == "stanleychu"
     assert saved[0].project_group_id == "sh-fs3"
 
 

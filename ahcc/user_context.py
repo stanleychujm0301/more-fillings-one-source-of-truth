@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-CURRENT_USER_ID = "chu-stanley"
+CURRENT_USER_ID = "stanleychu"
 CURRENT_DISPLAY_NAME = "Chu, Stanley"
 CURRENT_OFFICE_LINE = "SH/FS3"
 CURRENT_PROJECT_GROUP_ID = "sh-fs3"

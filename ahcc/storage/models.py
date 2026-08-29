@@ -200,9 +200,9 @@ def _ensure_user_profile_columns(conn: sqlite3.Connection) -> None:
 
 # ============ 演示账号种子（注册登录落地后替代单一演示用户） ============
 # 统一演示密码，覆盖三条演示动线：
-#   1. chu-stanley 同时属于 SH/FS3 与 SH/IPO 专项 —— 同一人多组切换
-#   2. yu-jill 与 chu-stanley 同组 —— 组内结果共享
-#   3. ni-andrew 在 BJ/FS1 —— 组间隔离（看不到 sh-fs3 的任务）
+#   1. stanleychu 同时属于 SH/FS3 与 SH/IPO 专项 —— 同一人多组切换
+#   2. demouser1 与 stanleychu 同组 —— 组内结果共享
+#   3. demouser2 在 BJ/FS1 —— 组间隔离（看不到 sh-fs3 的任务）
 _DEMO_PASSWORD = "demo1234"
 _DEMO_GROUPS: list[tuple[str, str]] = [
     ("sh-fs3", "SH/FS3"),
@@ -219,7 +219,7 @@ _DEMO_ACCOUNTS: list[dict[str, object]] = [
         "memberships": ("sh-fs3", "sh-ipo"),
     },
     {
-        "user_id": "yu-jill",
+        "user_id": "demouser1",
         "display_name": "Yu, Jill",
         "office_line": "SH/FS3",
         "role_title": "Audit Associate",
@@ -227,7 +227,7 @@ _DEMO_ACCOUNTS: list[dict[str, object]] = [
         "memberships": ("sh-fs3",),
     },
     {
-        "user_id": "ni-andrew",
+        "user_id": "demouser2",
         "display_name": "Ni, Andrew",
         "office_line": "BJ/FS1",
         "role_title": "Audit Manager",
@@ -238,10 +238,16 @@ _DEMO_ACCOUNTS: list[dict[str, object]] = [
 
 # 演示账号改名历史：老库里已经种入过旧 user_id，必须在种子之前就地改名，
 # 否则新旧两套账号会同时存在（项目组成员数翻倍，演示时对不上）。
+# 顺序即迁移顺序，且必须保持“旧跳在前”：老库里的 chen-yiran 要先改成 yu-jill，
+# 再由下一跳改成 demouser1，才能一路迁到当前 ID。新增改名时一律往列表末尾追加。
 _RENAMED_DEMO_ACCOUNTS: list[tuple[str, str, str]] = [
     # (旧 user_id, 新 user_id, 新 display_name)
     ("chen-yiran", "yu-jill", "Yu, Jill"),
     ("zhang-wei", "ni-andrew", "Ni, Andrew"),
+    # 第二轮改名：演示账号统一成好念好输的形式（展示姓名保持不变）
+    ("chu-stanley", "stanleychu", "Chu, Stanley"),
+    ("yu-jill", "demouser1", "Yu, Jill"),
+    ("ni-andrew", "demouser2", "Ni, Andrew"),
 ]
 
 

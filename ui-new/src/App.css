@@ -3982,42 +3982,138 @@ label input:focus {
   }
 }
 
-/* Auth pages (login / register) + project-group sharing UI */
+/* Auth pages (login / register) + project-group sharing UI.
+   The card is a two-column split: a light brand panel (identity shown exactly once) and a
+   white form panel, separated by a hairline. Brand-panel texture is the light `.command-hero`
+   recipe — tinted wash plus a faint navy grid — kept fully light-toned by request. */
 .auth-shell {
-  display: grid;
-  place-items: center;
+  /* flex + `margin: auto` on the child rather than `place-items: center`: the register
+     form is taller than a laptop viewport, and centring via place-items would push its
+     top edge above the scroll origin where it can never be reached. */
+  display: flex;
   min-height: 100vh;
   padding: clamp(18px, 4vw, 40px);
   background:
-    radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.82), transparent 34rem),
-    linear-gradient(180deg, #f8fafc 0%, #edf0f5 38%, #e6ecf4 100%);
+    radial-gradient(circle at 12% -6%, rgba(255, 255, 255, 0.9), transparent 32rem),
+    radial-gradient(circle at 88% 108%, rgba(0, 163, 224, 0.1), transparent 34rem),
+    linear-gradient(180deg, #f5f8fc 0%, #e9eef6 42%, #e1e8f2 100%);
 }
 
 .auth-card {
-  width: min(480px, 100%);
-  padding: clamp(22px, 3vw, 32px);
+  display: grid;
+  grid-template-columns: minmax(0, 400px) minmax(0, 460px);
+  width: min(880px, 100%);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
   border: 1px solid var(--surface-border);
   border-radius: var(--surface-radius);
   background: var(--surface-bg-strong);
-  box-shadow: var(--surface-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.76);
+  box-shadow: var(--shadow-float), inset 0 1px 0 rgba(255, 255, 255, 0.76);
   backdrop-filter: blur(22px);
 }
 
-.auth-brand {
+.auth-brand-panel {
+  /* auto / 1fr: mark pinned top, identity centred in whatever height is left. Register is
+     ~500px taller than login, and a flex space-between would blow that extra height into
+     enormous voids. */
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 28px;
+  padding: clamp(28px, 3vw, 38px);
+  color: var(--ink);
+  /* Light throughout — the only separation from the form column is the hairline below. */
+  border-right: 1px solid var(--surface-border);
+  background:
+    radial-gradient(circle at 92% -8%, rgba(0, 163, 224, 0.14), transparent 24rem),
+    repeating-linear-gradient(90deg, rgba(0, 51, 141, 0.05) 0 1px, transparent 1px 96px),
+    repeating-linear-gradient(0deg, rgba(0, 51, 141, 0.05) 0 1px, transparent 1px 96px),
+    linear-gradient(135deg, #f8fbff, #e9f0fb);
+}
+
+.auth-brand-mark {
+  flex: 0 0 auto;
+}
+
+/* No white plate here: the mark is hard-coded #00338d and this panel is already light, so
+   it prints directly on the wash the way the KPMG guidelines intend. */
+.auth-brand-panel .kpmg-logo {
+  width: 104px;
+}
+
+.auth-brand-identity {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+}
+
+.auth-brand-panel .auth-wordmark {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 22px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--surface-border);
+  flex-wrap: wrap;
+  gap: 9px;
+  color: var(--navy);
+  font-size: clamp(18px, 1.8vw, 20px);
+  font-weight: 780;
+  /* Letterspaced, not tight-and-heavy — matches the wordmark spec the pitch deck already
+     uses for KROSS-CHECK HUB (demo/finals-deck.html, .cover-brand). Sized so the KcH
+     pill still lands on the same line inside the 400px brand column. */
+  letter-spacing: 0.16em;
+  line-height: 1.25;
 }
 
-.auth-head {
-  margin-bottom: 18px;
+.auth-brand-panel .auth-wordmark .wm-name {
+  white-space: nowrap;
 }
 
-.auth-head h1 {
-  font-size: clamp(24px, 2.6vw, 30px);
+.auth-brand-panel .auth-wordmark .wm-accent {
+  color: var(--cobalt);
+}
+
+.auth-brand-panel .auth-wordmark .wm-abbr {
+  padding: 3px 9px;
+  color: var(--navy);
+  border: 1px solid rgba(0, 51, 141, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  font-size: 10.5px;
+  font-weight: 780;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.auth-brand-rule {
+  display: block;
+  width: 88px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--navy), rgba(0, 163, 224, 0));
+}
+
+.auth-brand-hero {
+  color: var(--navy-deep);
+  font-size: clamp(24px, 2.6vw, 29px);
+  font-weight: 820;
+  letter-spacing: 0.03em;
+  line-height: 1.28;
+}
+
+.auth-brand-en {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  line-height: 1.6;
+}
+
+.auth-form-panel {
+  /* Centred in the column: with the page heading gone the login form is short, and left
+     top-aligned it would sit oddly high against the brand panel. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(26px, 3vw, 36px);
+  background: #fff;
 }
 
 .auth-form {
@@ -4027,6 +4123,32 @@ label input:focus {
 
 .auth-form label {
   margin-bottom: 12px;
+}
+
+.auth-section + .auth-section .auth-section-head {
+  margin-top: 6px;
+}
+
+.auth-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.auth-section-head span {
+  flex: 0 0 auto;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+}
+
+.auth-section-head::after {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--surface-border);
+  content: "";
 }
 
 .auth-two-col {
@@ -4040,6 +4162,10 @@ label input:focus {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 51, 141, 0.28) transparent;
+}
+
+.auth-card .auth-group-options {
+  margin-bottom: 4px;
 }
 
 .auth-error {
@@ -4080,14 +4206,21 @@ label input:focus {
   text-decoration: underline;
 }
 
+/* Spans both grid columns as a card footer. Kept on one line (`nowrap`) — inside the form
+   column the string wrapped to three lines; the media query below releases it on mobile,
+   where the card is too narrow for any single-line fit. */
 .auth-demo-hint {
-  margin-top: 14px;
-  padding-top: 12px;
-  color: #98a2b3;
-  border-top: 1px dashed var(--surface-border);
+  grid-column: 1 / -1;
+  padding: 11px 16px;
+  overflow: hidden;
+  color: #64748b;
+  border-top: 1px solid var(--surface-border);
+  background: rgba(238, 245, 255, 0.7);
   font-size: 11.5px;
-  line-height: 1.5;
+  line-height: 1.55;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Toolbar project-group switcher */
@@ -4277,14 +4410,69 @@ label input:focus {
   padding-inline: 18px;
 }
 
+/* Below the split threshold the card stacks and the brand panel collapses into a compact
+   band: mark and wordmark share a row, the value points drop. */
+@media (max-width: 900px) {
+  .auth-card {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(480px, 100%);
+  }
+
+  .auth-brand-panel {
+    /* Base rule is a 2-row grid; the compact band is a single row, so the display type
+       has to be switched too — flex-direction alone does nothing to a grid container.
+       Stacked, the hairline moves from the right edge to the bottom. */
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 18px;
+    padding: 20px clamp(18px, 4vw, 26px);
+    border-right: 0;
+    border-bottom: 1px solid var(--surface-border);
+  }
+
+  .auth-brand-panel .kpmg-logo {
+    width: 84px;
+  }
+
+  .auth-brand-identity {
+    gap: 7px;
+  }
+
+  .auth-brand-panel .auth-wordmark {
+    font-size: 17px;
+    letter-spacing: 0.14em;
+  }
+
+  .auth-brand-rule {
+    display: none;
+  }
+
+  .auth-brand-hero {
+    font-size: 19px;
+  }
+
+  /* Card collapses to ~480px here — no single-line fit exists, so let it wrap normally
+     instead of ellipsising the account names away. */
+  .auth-demo-hint {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
 @media (max-width: 720px) {
   .auth-two-col {
     grid-template-columns: 1fr;
     gap: 0;
   }
 
-  .auth-card {
+  .auth-form-panel {
     padding: 20px 16px;
+  }
+
+  .auth-brand-panel {
+    flex-wrap: wrap;
   }
 
   .group-switcher-toggle {
