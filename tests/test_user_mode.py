@@ -53,6 +53,44 @@ def test_init_db_seeds_demo_user_and_job_ownership_columns(monkeypatch, workspac
     assert user["project_group_id"] == "sh-fs3"
 
 
+def test_init_db_seeds_demo_accounts_groups_and_memberships(monkeypatch, workspace_tmp):
+    _use_temp_db(monkeypatch, workspace_tmp)
+
+    with models.get_conn() as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        users = conn.execute(
+            "SELECT user_id, password_hash, password_salt, password_iterations FROM user_profiles ORDER BY user_id"
+        ).fetchall()
+        groups = conn.execute("SELECT group_id, group_name FROM project_groups ORDER BY group_id").fetchall()
+        memberships = conn.execute(
+            "SELECT user_id, group_id FROM user_group_memberships ORDER BY user_id, group_id"
+        ).fetchall()
+
+    assert {"sessions", "project_groups", "user_group_memberships"} <= tables
+    # 三个演示账号，密码哈希三要素齐备
+    assert [row["user_id"] for row in users] == ["chen-yiran", "chu-stanley", "zhang-wei"]
+    for row in users:
+        assert row["password_hash"]
+        assert row["password_salt"]
+        assert row["password_iterations"] == 200_000
+    # 三个项目组、四行 membership（stanley 一人多组）
+    assert [(row["group_id"], row["group_name"]) for row in groups] == [
+        ("bj-fs1", "BJ/FS1"),
+        ("sh-fs3", "SH/FS3"),
+        ("sh-ipo", "SH/IPO 专项"),
+    ]
+    assert [(row["user_id"], row["group_id"]) for row in memberships] == [
+        ("chen-yiran", "sh-fs3"),
+        ("chu-stanley", "sh-fs3"),
+        ("chu-stanley", "sh-ipo"),
+        ("zhang-wei", "bj-fs1"),
+    ]
+    # 种子密码可登录（大小写不敏感）
+    profile = repository.verify_user_credentials("CHU-Stanley", "demo1234")
+    assert profile is not None
+    assert profile["user_id"] == "chu-stanley"
+
+
 def test_sqlite_connection_tolerates_locked_journal_pragma(monkeypatch, workspace_tmp):
     class FakeConnection:
         row_factory = None

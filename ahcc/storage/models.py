@@ -14,8 +14,13 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from ahcc.auth import hash_password
 from ahcc.config import settings
-from ahcc.user_context import DEFAULT_USER_PROFILE
+from ahcc.user_context import (
+    CURRENT_PROJECT_GROUP_ID,
+    CURRENT_PROJECT_GROUP_NAME,
+    DEFAULT_USER_PROFILE,
+)
 
 
 SCHEMA = """
@@ -71,6 +76,34 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     avatar_path TEXT,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES user_profiles(user_id),
+    active_group_id TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS project_groups (
+    group_id TEXT PRIMARY KEY,
+    group_name TEXT NOT NULL UNIQUE,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_group_memberships (
+    user_id TEXT NOT NULL REFERENCES user_profiles(user_id),
+    group_id TEXT NOT NULL REFERENCES project_groups(group_id),
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, group_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memberships_group ON user_group_memberships(group_id);
 """
 
 _RECOVERED_SQLITE_PATH = Path("./scratch/ahcc.recovered.db")
@@ -122,7 +155,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_job_columns(conn)
     _ensure_user_profile_columns(conn)
-    _seed_demo_user_profile(conn)
+    _seed_demo_accounts(conn)
+    _backfill_memberships(conn)
     _backfill_job_ownership(conn)
     _ensure_indexes(conn)
     conn.commit()
@@ -152,26 +186,135 @@ def _ensure_user_profile_columns(conn: sqlite3.Connection) -> None:
         "role_title": "ALTER TABLE user_profiles ADD COLUMN role_title TEXT",
         "avatar_path": "ALTER TABLE user_profiles ADD COLUMN avatar_path TEXT",
         "updated_at": "ALTER TABLE user_profiles ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        # 登录功能（注册/登录）新增：密码哈希三要素 + 注册时间。存量行得到 NULL，
+        # 由 _backfill_demo_passwords 给演示账号定点回填 demo1234。
+        "password_hash": "ALTER TABLE user_profiles ADD COLUMN password_hash TEXT",
+        "password_salt": "ALTER TABLE user_profiles ADD COLUMN password_salt TEXT",
+        "password_iterations": "ALTER TABLE user_profiles ADD COLUMN password_iterations INTEGER",
+        "created_at": "ALTER TABLE user_profiles ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
     }.items():
         if column not in existing:
             conn.execute(ddl)
 
 
-def _seed_demo_user_profile(conn: sqlite3.Connection) -> None:
+# ============ 演示账号种子（注册登录落地后替代单一演示用户） ============
+# 统一演示密码，覆盖三条演示动线：
+#   1. chu-stanley 同时属于 SH/FS3 与 SH/IPO 专项 —— 同一人多组切换
+#   2. chen-yiran 与 chu-stanley 同组 —— 组内结果共享
+#   3. zhang-wei 在 BJ/FS1 —— 组间隔离（看不到 sh-fs3 的任务）
+_DEMO_PASSWORD = "demo1234"
+_DEMO_GROUPS: list[tuple[str, str]] = [
+    ("sh-fs3", "SH/FS3"),
+    ("sh-ipo", "SH/IPO 专项"),
+    ("bj-fs1", "BJ/FS1"),
+]
+_DEMO_ACCOUNTS: list[dict[str, object]] = [
+    {
+        "user_id": DEFAULT_USER_PROFILE["user_id"],
+        "display_name": DEFAULT_USER_PROFILE["display_name"],
+        "office_line": DEFAULT_USER_PROFILE["office_line"],
+        "role_title": "Senior Manager",
+        "project_group_id": "sh-fs3",
+        "memberships": ("sh-fs3", "sh-ipo"),
+    },
+    {
+        "user_id": "chen-yiran",
+        "display_name": "Chen, Yiran",
+        "office_line": "SH/FS3",
+        "role_title": "Audit Associate",
+        "project_group_id": "sh-fs3",
+        "memberships": ("sh-fs3",),
+    },
+    {
+        "user_id": "zhang-wei",
+        "display_name": "Zhang, Wei",
+        "office_line": "BJ/FS1",
+        "role_title": "Audit Manager",
+        "project_group_id": "bj-fs1",
+        "memberships": ("bj-fs1",),
+    },
+]
+
+
+def _set_demo_password(conn: sqlite3.Connection, user_id: str) -> None:
+    password_hash, password_salt, iterations = hash_password(_DEMO_PASSWORD)
     conn.execute(
-        """INSERT OR IGNORE INTO user_profiles
-        (user_id, display_name, office_line, role_title, project_group_id, project_group_name, avatar_path, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-        (
-            DEFAULT_USER_PROFILE["user_id"],
-            DEFAULT_USER_PROFILE["display_name"],
-            DEFAULT_USER_PROFILE["office_line"],
-            DEFAULT_USER_PROFILE["role_title"],
-            DEFAULT_USER_PROFILE["project_group_id"],
-            DEFAULT_USER_PROFILE["project_group_name"],
-            DEFAULT_USER_PROFILE["avatar_path"],
-        ),
+        "UPDATE user_profiles SET password_hash = ?, password_salt = ?, password_iterations = ? WHERE user_id = ?",
+        (password_hash, password_salt, iterations, user_id),
     )
+
+
+def _seed_demo_accounts(conn: sqlite3.Connection) -> None:
+    """幂等种入演示项目组 + 演示账号 + 成员关系。
+
+    仅在新插入账号行（rowcount == 1）时计算 PBKDF2（约 100ms/账号），
+    避免每次启动为已有账号白算哈希。
+    """
+    group_names = dict(_DEMO_GROUPS)
+    first_user = str(_DEMO_ACCOUNTS[0]["user_id"])
+    for group_id, group_name in _DEMO_GROUPS:
+        conn.execute(
+            "INSERT OR IGNORE INTO project_groups (group_id, group_name, created_by, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (group_id, group_name, first_user),
+        )
+    for account in _DEMO_ACCOUNTS:
+        user_id = str(account["user_id"])
+        active_group_id = str(account["project_group_id"])
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO user_profiles
+            (user_id, display_name, office_line, role_title, project_group_id, project_group_name, avatar_path, updated_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (
+                user_id,
+                account["display_name"],
+                account["office_line"],
+                account["role_title"],
+                active_group_id,
+                group_names[active_group_id],
+                DEFAULT_USER_PROFILE["avatar_path"],
+            ),
+        )
+        if cursor.rowcount == 1:
+            _set_demo_password(conn, user_id)
+        for group_id in account["memberships"]:  # type: ignore[union-attr]
+            conn.execute(
+                "INSERT OR IGNORE INTO user_group_memberships (user_id, group_id, joined_at) VALUES (?, ?, datetime('now'))",
+                (user_id, group_id),
+            )
+    _backfill_demo_passwords(conn)
+
+
+def _backfill_demo_passwords(conn: sqlite3.Connection) -> None:
+    """存量库（登录功能上线前创建）里的演示账号没有密码——定点回填，使其可登录。"""
+    for account in _DEMO_ACCOUNTS:
+        user_id = str(account["user_id"])
+        row = conn.execute(
+            "SELECT password_hash FROM user_profiles WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row and not row["password_hash"]:
+            _set_demo_password(conn, user_id)
+
+
+def _backfill_memberships(conn: sqlite3.Connection) -> None:
+    """老库用户（登录功能前）没有任何 membership 行——按其 profile 的项目组回填，
+    并兜底保证该组在 project_groups 里有记录。"""
+    rows = conn.execute(
+        """SELECT p.user_id, p.project_group_id, p.project_group_name
+        FROM user_profiles p
+        WHERE NOT EXISTS (SELECT 1 FROM user_group_memberships m WHERE m.user_id = p.user_id)"""
+    ).fetchall()
+    for row in rows:
+        group_id = row["project_group_id"] or CURRENT_PROJECT_GROUP_ID
+        group_name = row["project_group_name"] or CURRENT_PROJECT_GROUP_NAME
+        conn.execute(
+            "INSERT OR IGNORE INTO project_groups (group_id, group_name, created_by, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (group_id, group_name, row["user_id"]),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO user_group_memberships (user_id, group_id, joined_at) VALUES (?, ?, datetime('now'))",
+            (row["user_id"], group_id),
+        )
 
 
 def _backfill_job_ownership(conn: sqlite3.Connection) -> None:

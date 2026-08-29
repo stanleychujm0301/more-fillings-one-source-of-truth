@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     vlm_provider: str = "deepseek"
     vlm_model: str = "deepseek-v4-pro"
 
+    # 答辩当天可选开启的公网访问网关（留空=不启用，本地开发/测试/eval 默认不受影响）
+    # 启用后：GET 请求会种下同名 Cookie；POST/PUT/PATCH/DELETE 需带该 Cookie 或 X-API-Key
+    # 请求头才放行——挡住直接脚本调用，浏览器打开页面正常使用不受影响。
+    api_auth_token: str = ""
+
+    # 登录认证旁路：默认 False（启用注册登录）。AHCC_AUTH_DISABLED=1 时所有受保护 API
+    # 以演示用户身份放行 —— 仅供测试/CLI/eval 使用（见 tests/conftest.py）。
+    # 用显式 validation_alias 让环境变量名带 AHCC_ 前缀，避免与通用名冲突。
+    auth_disabled: bool = Field(default=False, validation_alias="AHCC_AUTH_DISABLED")
+
     # 应用
     app_env: str = "dev"
     log_level: str = "INFO"
@@ -85,7 +95,7 @@ class Settings(BaseSettings):
     enable_text_overlay_check: bool = True
     # 任务执行：subprocess=每个任务独立 worker 子进程（可强杀，崩溃不连累服务）；inline=事件循环内执行（测试/评估用）
     job_runner: str = "subprocess"
-    job_max_concurrency: int = 1
+    job_max_concurrency: int = 3
     job_timeout_seconds: float = 1800
     job_stale_after_seconds: float = 900
     # worker 心跳文件超过该秒数未更新即判定卡死并强杀

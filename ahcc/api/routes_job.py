@@ -10,10 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from loguru import logger
 
+from ahcc.api.deps import get_current_user
 from ahcc.check.branch_disclosure import (
     branch_table_diagnostics,
     compare_branch_tables,
@@ -105,10 +106,14 @@ async def _save_upload_pdf(upload: UploadFile, dest: Path) -> None:
 
 
 @router.get("/history")
-def list_jobs_endpoint(limit: int = 10, scope: str = "project") -> list[dict]:
-    """列出历史核查任务。"""
+def list_jobs_endpoint(
+    limit: int = 10,
+    scope: str = "project",
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """列出历史核查任务。scope=project 按当前激活项目组过滤；scope=mine 按当前用户过滤。"""
     clamped_limit = max(_HISTORY_LIMIT_MIN, min(_HISTORY_LIMIT_MAX, limit))
-    return list_jobs(clamped_limit, scope=scope)
+    return list_jobs(clamped_limit, scope=scope, profile=user)
 
 
 @router.post("/", response_model=Job)
@@ -119,6 +124,7 @@ async def create_job(
     visual_review_mode: str = Form("off"),
     a_file: UploadFile = File(...),
     h_file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
 ) -> Job:
     """创建并执行一个核查任务。"""
     normalized_company_name = company_name.strip()
@@ -161,7 +167,8 @@ async def create_job(
             a_file=str(a_path),
             h_file=str(h_path),
             status=JobStatus.PENDING,
-        )
+        ),
+        profile=user,
     )
     save_job(job)
     from ahcc.api.job_runner import run_job  # 延迟导入避免循环
@@ -261,18 +268,18 @@ def _failed_background_job(job: Job, message: str) -> Job:
 
 
 @router.get("/{job_id}/diffs", response_model=list[Diff])
-def list_diffs(job_id: str) -> list[Diff]:
+def list_diffs(job_id: str, user: dict = Depends(get_current_user)) -> list[Diff]:
     _repair_branch_diffs_if_needed(job_id)
-    if not get_job(job_id):
+    if not get_job(job_id, profile=user):
         raise HTTPException(status_code=404, detail="job not found")
     return get_diffs(job_id)
 
 
 @router.get("/{job_id}")
-def get_job_detail(job_id: str):
-    """获取单个历史任务详情（含 diffs）。"""
+def get_job_detail(job_id: str, user: dict = Depends(get_current_user)):
+    """获取单个历史任务详情（含 diffs）。非本激活项目组的任务一律 404（组间隔离）。"""
     _repair_branch_diffs_if_needed(job_id)
-    job_meta = get_job(job_id)
+    job_meta = get_job(job_id, profile=user)
     if not job_meta:
         raise HTTPException(status_code=404, detail="job not found")
     job_meta["diffs"] = [d.model_dump() for d in get_diffs(job_id)]
@@ -288,26 +295,26 @@ def _pending_job_queue_position(job_id: str) -> int | None:
 
 
 @router.get("/{job_id}/report.xlsx")
-def download_excel(job_id: str):
-    path = _regenerate_report(job_id, "report.xlsx", export_excel)
+def download_excel(job_id: str, user: dict = Depends(get_current_user)):
+    path = _regenerate_report(job_id, "report.xlsx", export_excel, profile=user)
     return _no_cache_report_response(path, filename=f"AHCC-{job_id}.xlsx")
 
 
 @router.get("/{job_id}/report.pdf")
-def download_pdf(job_id: str):
-    path = _regenerate_report(job_id, "report.pdf", export_pdf)
+def download_pdf(job_id: str, user: dict = Depends(get_current_user)):
+    path = _regenerate_report(job_id, "report.pdf", export_pdf, profile=user)
     return _no_cache_report_response(path, filename=f"AHCC-{job_id}.pdf")
 
 
 @router.get("/{job_id}/report.html")
-def download_html(job_id: str):
-    path = _regenerate_report(job_id, "report.html", export_html)
+def download_html(job_id: str, user: dict = Depends(get_current_user)):
+    path = _regenerate_report(job_id, "report.html", export_html, profile=user)
     return _no_cache_report_response(path, filename=f"AHCC-{job_id}.html")
 
 
-def _load_job_for_report(job_id: str) -> Job:
+def _load_job_for_report(job_id: str, profile: dict | None = None) -> Job:
     _repair_branch_diffs_if_needed(job_id)
-    job_meta = get_job(job_id)
+    job_meta = get_job(job_id, profile=profile)
     if not job_meta:
         raise HTTPException(status_code=404, detail="job not found")
     payload = dict(job_meta)
@@ -315,8 +322,8 @@ def _load_job_for_report(job_id: str) -> Job:
     return Job.model_validate(payload)
 
 
-def _regenerate_report(job_id: str, report_name: str, exporter) -> Path:
-    job = _load_job_for_report(job_id)
+def _regenerate_report(job_id: str, report_name: str, exporter, profile: dict | None = None) -> Path:
+    job = _load_job_for_report(job_id, profile=profile)
     out_dir = settings.storage_dir / "jobs" / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -378,7 +385,9 @@ def _repair_branch_diffs_if_needed(job_id: str) -> bool:
 
 
 def _repair_branch_diffs_if_needed_locked(job_id: str) -> bool:
-    job_meta = get_job(job_id)
+    # 系统内部的修复行为：不做请求方组校验（非演示用户的任务也必须能被修复到）。
+    # 请求侧的数据可见性由各端点的 get_job(..., profile=user) 保证。
+    job_meta = get_job(job_id, enforce_group=False)
     if not job_meta:
         return False
     diffs = get_diffs(job_id)

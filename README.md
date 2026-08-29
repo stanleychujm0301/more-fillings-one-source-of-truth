@@ -25,6 +25,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 
 该脚本会在本机 `8001` 启动后端并打开 `http://127.0.0.1:8001/app#/cockpit`，只适合你自己的电脑或现场同机演示，不适合作为评委远程入口。
 
+## 演示账号与项目组共享
+
+系统采用注册/登录制：首次打开会进入登录页，登录后按项目组分流——同一项目组内所有成员的核查结果互相可见，跨项目组不可见。已预置以下演示账号（密码均为 `demo1234`）：
+
+| 用户名 | 姓名 | 角色 | 项目组 |
+|---|---|---|---|
+| `chu-stanley` | Chu, Stanley | Senior Manager | SH/FS3、SH/IPO 专项（一人多组，导航栏可切换） |
+| `chen-yiran` | Chen, Yiran | Audit Associate | SH/FS3（与 stanley 同组，可看到彼此的任务） |
+| `zhang-wei` | Zhang, Wei | Audit Manager | BJ/FS1（异组，看不到 SH/FS3 的任务） |
+
+也可以在登录页直接注册新账号：选择加入已有项目组，或输入名称创建新项目组（创建者自动成为首个成员）。已登录用户可在「个人资料 → 我的项目组」中加入更多项目组，并通过导航栏左侧的项目组切换器切换当前视角。
+
 > 跨市场年报数据一致性核查工具：自动比对 A 股与 H 股年报中的数值、披露、准则差异与图表一致性，输出带证据链的差异报告。
 >
 > 本项目源于 KPMG 黑客松 China Challenge #1，现整理为开源项目供审计、投行、研究与开发者使用。
@@ -38,17 +50,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 | **底座：数值核查** | 抽取 A/H 年报关键财务指标，识别数值差异与勾稽断裂 |
 | **文本层叠加篡改检测** | 纯 PyMuPDF 检出"错误值覆盖原值"的植入式篡改（主办方 3 组样本 45/45 检出、0 误报，秒级） |
 | **分支机构核查** | 轻量文本抽取比对 A/H 分行资产规模表（光大银行真实对稳定检出 40 处不一致） |
-| **亮点 1：准则差异解读** | 基于 CAS/IFRS 知识库进行 RAG 推理，输出准则引用与解读 |
-| **亮点 2：图表交叉核对** | 多模态比对图表与表格数据，识别图表-表格不一致 |
+| **亮点：图表交叉核对** | 多模态比对图表与表格数据，识别图表-表格不一致 |
 
 输出格式：Excel、PDF、HTML 报告。
+
+> **准则差异解读（CAS ↔ IFRS/HKFRS）：路线图规划中，尚未上线。**
+> 知识库已覆盖 15 个高频差异主题（`kb/standards/`，Markdown 配置化，新增主题无需改代码），
+> RAG 检索 + LLM 判断的检测代码（`ahcc/rag/`、`ahcc/check/standard.py`）已实现，但尚未接入
+> `build_kb.py` 索引构建、产品 UI 也无对应入口，因此不作为已具备能力对外展示。上线后同样
+> 强制附页级证据、低置信度转人工，保持与其余模块一致的确定性框架。
 
 ### 任务执行架构
 
 每个核查任务在独立 worker 子进程中执行（`python -m ahcc.worker`），API 服务进程负责监督：
-超时（默认 1800s，`JOB_TIMEOUT_SECONDS`）或心跳失联（默认 300s，`JOB_HEARTBEAT_STALE_SECONDS`）
 时直接 kill 子进程——卡死的 OCR/解析线程不再拖垮服务。同时最多运行
-`JOB_MAX_CONCURRENCY`（默认 1）个任务，其余排队。`JOB_RUNNER=inline` 可回退到
+`JOB_MAX_CONCURRENCY`（默认 3）个任务，其余排队。`JOB_RUNNER=inline` 可回退到
 旧的进程内执行（pytest/eval 默认）。任务级日志见 `storage/jobs/<job_id>/worker.log`，
 服务日志见 `logs/server.log`。
 
@@ -137,7 +153,7 @@ tests/             单元测试
 | 单组样本处理时长 | < 10 分钟 |
 | 漏检率 | ≤ 5% |
 | 每条差异附页码证据链 | 100% |
-| 准则差异智能解读 | ≥ 1 条带 RAG 引用 |
+| 准则差异智能解读 | ≥ 1 条带 RAG 引用（路线图规划中，尚未达成，见上文说明） |
 | 图表三方核对 | ≥ 1 个场景 |
 
 ---

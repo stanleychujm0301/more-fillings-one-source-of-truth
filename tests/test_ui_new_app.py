@@ -1165,3 +1165,57 @@ def test_readme_documents_public_competition_entry_and_localhost_limitations():
 
     assert "http://localhost" not in app_source
     assert "http://127.0.0.1" not in app_source
+
+
+def test_ui_new_auth_pages_and_group_sharing_tokens_present():
+    """注册/登录页、项目组切换器与共享文案的关键 token（聚合读取整个 ui-new/src）。"""
+    source = APP_TSX.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for token in (
+        # 路由与独立登录/注册页
+        "#/login",
+        "#/register",
+        # 认证端点
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/logout",
+        "/api/auth/groups",
+        # 会话级激活组切换与组管理端点
+        "/api/session/active-group",
+        "/api/groups/join",
+        # 会话 Cookie 跨源携带
+        "credentials: 'include'",
+        # 组内共享文案（注册页 / 个人资料页组管理）
+        "加入已有项目组",
+        "创建新项目组",
+        "我的项目组",
+        # 退出登录
+        "退出",
+        # 401 统一处理钩子
+        "setUnauthorizedHandler",
+        "isAuthError",
+    ):
+        assert token in source
+
+    # 组选择一律卡片式单选，禁止原生下拉（红线）
+    assert "<select" not in source
+
+    # 登录页与组切换器样式存在且复用现有设计 token
+    for selector in (
+        ".auth-shell",
+        ".auth-card",
+        ".auth-form",
+        ".auth-error",
+        ".group-switcher-toggle",
+        ".group-switcher-menu",
+        ".group-membership-list",
+        ".group-current-badge",
+        ".logout-button",
+    ):
+        assert selector in css
+
+    # 复用 surface/focus/motion token 体系，与 .panel/.profile-card 同一视觉语言
+    assert css.count("var(--surface-border)") >= 4
+    assert "var(--focus-ring)" in css
+    assert "var(--motion-fast)" in css

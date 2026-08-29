@@ -242,7 +242,7 @@ def test_list_jobs_endpoint_clamps_limit(monkeypatch, requested_limit, expected_
     monkeypatch.setattr(
         routes_job,
         "list_jobs",
-        lambda limit, scope="project": captured.update(limit=limit, scope=scope) or [],
+        lambda limit, scope="project", profile=None: captured.update(limit=limit, scope=scope) or [],
     )
 
     with TestClient(api_main.app) as client:
@@ -383,7 +383,7 @@ def test_job_detail_exposes_queue_position_for_pending_jobs(monkeypatch, workspa
     monkeypatch.setattr(
         routes_job,
         "get_job",
-        lambda job_id: {
+        lambda job_id, **_: {
             "job_id": job_id,
             "company_name": "Queued Co",
             "check_mode": "ah",
@@ -415,7 +415,7 @@ def test_job_detail_queue_position_is_null_when_not_queued(monkeypatch, workspac
     monkeypatch.setattr(
         routes_job,
         "get_job",
-        lambda job_id: {
+        lambda job_id, **_: {
             "job_id": job_id,
             "company_name": "Solo Co",
             "check_mode": "ah",

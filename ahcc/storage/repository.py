@@ -1,21 +1,31 @@
-"""存储仓库 — Job/Diff/Review 的 CRUD 包装（P3 实现）。"""
+"""存储仓库 — Job/Diff/Review/User/Session 的 CRUD 包装（P3 实现）。"""
 
 from __future__ import annotations
 
 import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Optional
+from uuid import uuid4
 
+from ahcc.auth import (
+    SESSION_TTL_DAYS,
+    hash_password,
+    hash_session_token,
+    new_session_token,
+    normalize_username,
+    verify_password,
+)
 from ahcc.profile.models import MetricItem, MetricOccurrences, ReportProfile
 from ahcc.schemas import Currency, Diff, DiffSeverity, DiffType, Evidence, Job, JobStatus, LocalizedString, ReportSide, ReviewStatus
 from ahcc.storage.models import get_conn
 from ahcc.parser.audit import EXTRACTION_ENGINE_VERSION, PARSER_VERSION, classify_warning
 from ahcc.user_context import (
     CURRENT_PROJECT_GROUP_ID,
+    CURRENT_PROJECT_GROUP_NAME,
     CURRENT_USER_ID,
     DEFAULT_USER_PROFILE,
     public_user_payload,
@@ -56,7 +66,16 @@ _LEGACY_BOARD_TERMS = ("董事会人员构成", "年龄组别", "董事类别", 
 _SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
 
+class DuplicateUserError(ValueError):
+    """注册时用户名（user_id）已存在。"""
+
+
+class GroupNotFoundError(LookupError):
+    """按 id 查找的项目组不存在。"""
+
+
 def get_current_user_profile() -> dict:
+    """演示兜底用户（无会话场景：worker 子进程 / CLI / 测试旁路）。"""
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM user_profiles WHERE user_id = ?",
@@ -65,57 +84,363 @@ def get_current_user_profile() -> dict:
     return dict(row) if row else dict(DEFAULT_USER_PROFILE)
 
 
-def get_current_session() -> dict:
-    profile = get_current_user_profile()
+def get_user_profile(user_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_profiles WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+# ============ 项目组与成员关系 ============
+
+_GROUP_SLUG_MAX = 40
+
+
+def slugify_group_name(name: str) -> str:
+    """项目组名 → slug id：小写、非 [a-z0-9]+ 折叠为 -、截 40 字符；
+    纯中文等无 ASCII 字符时回退 grp-<随机>。"""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    slug = slug[:_GROUP_SLUG_MAX].strip("-")
+    if not slug:
+        slug = f"grp-{uuid4().hex[:8]}"
+    return slug
+
+
+def get_project_group(group_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT group_id, group_name FROM project_groups WHERE group_id = ?",
+            (group_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def ensure_project_group(name: str, created_by: str | None = None) -> dict:
+    """按名称取或建项目组。同名（大小写不敏感）已存在则复用；并发创建同名组由
+    UNIQUE 约束兜底，失败方回落到复用。slug 撞车（不同名同 slug）时追加随机后缀。"""
+    group_name = (name or "").strip()
+    if not group_name:
+        raise ValueError("group name must not be empty")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT group_id, group_name FROM project_groups WHERE group_name = ? COLLATE NOCASE",
+            (group_name,),
+        ).fetchone()
+        if row:
+            return {"group_id": row["group_id"], "group_name": row["group_name"]}
+        group_id = slugify_group_name(group_name)
+        for candidate in (group_id, f"{group_id}-{uuid4().hex[:4]}"):
+            try:
+                conn.execute(
+                    "INSERT INTO project_groups (group_id, group_name, created_by, created_at) VALUES (?, ?, ?, datetime('now'))",
+                    (candidate, group_name, created_by),
+                )
+                conn.commit()
+                return {"group_id": candidate, "group_name": group_name}
+            except sqlite3.IntegrityError:
+                # 并发同名插入：另一个请求已创建，直接复用
+                row = conn.execute(
+                    "SELECT group_id, group_name FROM project_groups WHERE group_name = ? COLLATE NOCASE",
+                    (group_name,),
+                ).fetchone()
+                if row:
+                    return {"group_id": row["group_id"], "group_name": row["group_name"]}
+    raise RuntimeError(f"failed to create project group: {group_name}")
+
+
+def list_project_groups() -> list[dict]:
+    """全部项目组（注册页候选列表），含成员数。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT g.group_id, g.group_name, COUNT(m.user_id) AS member_count
+            FROM project_groups g
+            LEFT JOIN user_group_memberships m ON m.group_id = g.group_id
+            GROUP BY g.group_id, g.group_name
+            ORDER BY g.created_at, g.group_id"""
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_memberships(user_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT m.group_id, g.group_name, m.joined_at
+            FROM user_group_memberships m
+            JOIN project_groups g ON g.group_id = m.group_id
+            WHERE m.user_id = ?
+            ORDER BY m.joined_at, m.group_id""",
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def resolve_session_profile(profile: dict, active_group_id: str | None) -> dict:
+    """按 session 激活组解析出本次请求生效的 project_group_id/name。
+
+    解析链（每步都校验 membership，防脏数据/越权）：
+    session.active_group_id → profile 上次激活组 → 第一个 membership → 演示默认组。
+    返回新 dict：project_group_id/name 已改写为解析结果，并带 "memberships" 键 —
+    下游 list_jobs/get_job/apply_current_user_context 消费到的即是激活组，零改动。
+    """
+    user_id = profile.get("user_id") or CURRENT_USER_ID
+    memberships = list_memberships(user_id)
+    member_groups = {m["group_id"]: m["group_name"] for m in memberships}
+
+    resolved_id: str | None = None
+    for candidate in (
+        active_group_id,
+        profile.get("project_group_id"),
+        memberships[0]["group_id"] if memberships else None,
+    ):
+        if candidate and candidate in member_groups:
+            resolved_id = str(candidate)
+            break
+
+    resolved = dict(profile)
+    if resolved_id is None:
+        # 无任何有效成员关系（不应发生；兜底保证 payload 合法）
+        resolved_id = CURRENT_PROJECT_GROUP_ID
+        resolved["project_group_id"] = resolved_id
+        resolved["project_group_name"] = CURRENT_PROJECT_GROUP_NAME
+        resolved["memberships"] = [
+            {"group_id": resolved_id, "group_name": CURRENT_PROJECT_GROUP_NAME, "is_active": True}
+        ]
+        return resolved
+
+    resolved["project_group_id"] = resolved_id
+    resolved["project_group_name"] = member_groups[resolved_id]
+    resolved["memberships"] = [
+        {
+            "group_id": m["group_id"],
+            "group_name": m["group_name"],
+            "is_active": m["group_id"] == resolved_id,
+        }
+        for m in memberships
+    ]
+    return resolved
+
+
+def switch_active_group(user_id: str, raw_token: str | None, group_id: str) -> Optional[dict]:
+    """切换当前 session 的激活项目组；同时回写 user_profiles 的"上次激活组"
+    （下次登录的新 session 默认落到该组）。非成员返回 None（路由层转 403）。"""
+    memberships = list_memberships(user_id)
+    member = next((m for m in memberships if m["group_id"] == group_id), None)
+    if member is None:
+        return None
+    with get_conn() as conn:
+        if raw_token:
+            conn.execute(
+                "UPDATE sessions SET active_group_id = ?, last_seen_at = ? WHERE token_hash = ?",
+                (group_id, datetime.utcnow().isoformat(), hash_session_token(raw_token)),
+            )
+        conn.execute(
+            "UPDATE user_profiles SET project_group_id = ?, project_group_name = ?, updated_at = datetime('now') WHERE user_id = ?",
+            (group_id, member["group_name"], user_id),
+        )
+        conn.commit()
+    profile = get_user_profile(user_id) or dict(DEFAULT_USER_PROFILE)
+    return resolve_session_profile(profile, group_id)
+
+
+def join_group(
+    user_id: str,
+    *,
+    mode: str,
+    group_id: str | None = None,
+    group_name: str | None = None,
+) -> dict:
+    """登录用户加入已有组或创建新组（幂等：已是成员返回 already_member=True）。"""
+    if mode == "create":
+        group = ensure_project_group(group_name or "", created_by=user_id)
+    else:
+        group = get_project_group((group_id or "").strip())
+        if group is None:
+            raise GroupNotFoundError(group_id)
+    already_member = any(m["group_id"] == group["group_id"] for m in list_memberships(user_id))
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO user_group_memberships (user_id, group_id, joined_at) VALUES (?, ?, datetime('now'))",
+            (user_id, group["group_id"]),
+        )
+        conn.commit()
+    return {"group": group, "already_member": already_member}
+
+
+# ============ 用户注册 / 登录 / 会话 ============
+
+def create_user(
+    *,
+    user_id: str,
+    display_name: str,
+    password: str,
+    office_line: str = "",
+    role_title: str = "",
+    project_group_id: str,
+    project_group_name: str,
+) -> dict:
+    """注册新用户：同事务写入 user_profiles + 初始 membership。重名抛 DuplicateUserError。"""
+    password_hash, password_salt, iterations = hash_password(password)
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                """INSERT INTO user_profiles
+                (user_id, display_name, office_line, role_title, project_group_id, project_group_name,
+                 avatar_path, updated_at, created_at, password_hash, password_salt, password_iterations)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), datetime('now'), ?, ?, ?)""",
+                (
+                    user_id,
+                    display_name,
+                    office_line,
+                    role_title,
+                    project_group_id,
+                    project_group_name,
+                    password_hash,
+                    password_salt,
+                    iterations,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateUserError(user_id) from exc
+        conn.execute(
+            "INSERT OR IGNORE INTO user_group_memberships (user_id, group_id, joined_at) VALUES (?, ?, datetime('now'))",
+            (user_id, project_group_id),
+        )
+        conn.commit()
+    profile = get_user_profile(user_id)
+    if profile is None:  # pragma: no cover - 防御：刚插入的行必然存在
+        raise RuntimeError(f"create_user: user {user_id} missing after insert")
+    return profile
+
+
+def verify_user_credentials(username: str, password: str) -> Optional[dict]:
+    profile = get_user_profile(normalize_username(username))
+    if not profile:
+        return None
+    if not verify_password(
+        password,
+        profile.get("password_salt") or "",
+        profile.get("password_hash") or "",
+        profile.get("password_iterations"),
+    ):
+        return None
+    return profile
+
+
+def create_session(user_id: str) -> str:
+    """建立会话，返回原始 token（只进 Cookie，不落库）；库里只存 sha256。"""
+    raw_token, token_hash = new_session_token()
+    now = datetime.utcnow()
+    expires = now + timedelta(days=SESSION_TTL_DAYS)
+    with get_conn() as conn:
+        # 顺带清理过期会话（轻量 GC，避免 sessions 表无限膨胀）
+        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now.isoformat(),))
+        conn.execute(
+            """INSERT INTO sessions (token_hash, user_id, active_group_id, created_at, expires_at, last_seen_at)
+            VALUES (?, ?, NULL, ?, ?, ?)""",
+            (token_hash, user_id, now.isoformat(), expires.isoformat(), now.isoformat()),
+        )
+        conn.commit()
+    return raw_token
+
+
+def get_session_user(raw_token: str) -> Optional[dict]:
+    """按 Cookie token 解析登录用户；返回的 profile 已按 session 激活组解析。"""
+    if not raw_token:
+        return None
+    token_hash = hash_session_token(raw_token)
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT user_id, active_group_id, expires_at FROM sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+        if not row or str(row["expires_at"]) < now:
+            return None
+        profile_row = conn.execute(
+            "SELECT * FROM user_profiles WHERE user_id = ?",
+            (row["user_id"],),
+        ).fetchone()
+        if not profile_row:
+            return None
+        conn.execute(
+            "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?",
+            (now, token_hash),
+        )
+        conn.commit()
+    return resolve_session_profile(dict(profile_row), row["active_group_id"])
+
+
+def delete_session(raw_token: str) -> None:
+    if not raw_token:
+        return
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_session_token(raw_token),))
+        conn.commit()
+
+
+def build_session_payload(profile: dict) -> dict:
+    """/api/session/current 及登录/注册/切组的统一响应结构。"""
     user = public_user_payload(profile)
     return {
         "user": user,
         "project_group": user["project_group"],
+        "memberships": profile.get("memberships") or [],
     }
 
 
+def get_current_session() -> dict:
+    """无会话场景（auth 旁路 / 测试）的 session payload：演示用户 + 解析后激活组。"""
+    return build_session_payload(resolve_session_profile(get_current_user_profile(), None))
+
+
 def update_current_user_profile(
+    user_id: str,
     *,
     display_name: str | None = None,
     office_line: str | None = None,
     role_title: str | None = None,
 ) -> dict:
-    current = get_current_user_profile()
+    """更新个人资料。注意：组归属不在此处变更，只走 active-group / groups/join 专用端点。"""
+    current = get_user_profile(user_id) or dict(DEFAULT_USER_PROFILE)
     updated = {
         "display_name": (display_name if display_name is not None else current.get("display_name") or "").strip(),
         "office_line": (office_line if office_line is not None else current.get("office_line") or "").strip(),
         "role_title": (role_title if role_title is not None else current.get("role_title") or "").strip(),
     }
     if not updated["display_name"]:
-        updated["display_name"] = DEFAULT_USER_PROFILE["display_name"]
+        updated["display_name"] = current.get("display_name") or DEFAULT_USER_PROFILE["display_name"]
     if not updated["office_line"]:
-        updated["office_line"] = DEFAULT_USER_PROFILE["office_line"]
+        updated["office_line"] = current.get("office_line") or DEFAULT_USER_PROFILE["office_line"]
 
     with get_conn() as conn:
         conn.execute(
             """UPDATE user_profiles
             SET display_name = ?, office_line = ?, role_title = ?, updated_at = datetime('now')
             WHERE user_id = ?""",
-            (updated["display_name"], updated["office_line"], updated["role_title"], CURRENT_USER_ID),
+            (updated["display_name"], updated["office_line"], updated["role_title"], user_id),
         )
         conn.commit()
-    return public_user_payload(get_current_user_profile())
+    return public_user_payload(get_user_profile(user_id) or current)
 
 
-def set_current_user_avatar(avatar_path: str) -> dict:
+def set_current_user_avatar(user_id: str, avatar_path: str) -> dict:
     with get_conn() as conn:
         conn.execute(
             """UPDATE user_profiles
             SET avatar_path = ?, updated_at = datetime('now')
             WHERE user_id = ?""",
-            (avatar_path, CURRENT_USER_ID),
+            (avatar_path, user_id),
         )
         conn.commit()
-    return public_user_payload(get_current_user_profile())
+    return public_user_payload(get_user_profile(user_id) or dict(DEFAULT_USER_PROFILE))
 
 
-def apply_current_user_context(job: Job) -> Job:
-    profile = get_current_user_profile()
+def apply_current_user_context(job: Job, profile: dict | None = None) -> Job:
+    """给任务盖戳 owner/项目组。profile 缺省（worker/后台任务等非请求场景）回落演示用户；
+    只填空缺字段——已在创建时盖过戳的任务不会被回落逻辑覆盖。"""
+    profile = profile or get_current_user_profile()
     return job.model_copy(
         update={
             "owner_user_id": job.owner_user_id or profile.get("user_id") or CURRENT_USER_ID,
@@ -132,9 +457,10 @@ def apply_current_user_context(job: Job) -> Job:
     )
 
 
-def list_jobs(limit: int = 10, scope: str = "project") -> list[dict]:
-    """列出历史任务摘要（不含 diffs）。"""
-    profile = get_current_user_profile()
+def list_jobs(limit: int = 10, scope: str = "project", profile: dict | None = None) -> list[dict]:
+    """列出历史任务摘要（不含 diffs）。profile 应传入按 session 激活组解析后的用户；
+    缺省回落演示用户。"""
+    profile = profile or get_current_user_profile()
     normalized_scope = (scope or "project").strip().lower()
     if normalized_scope not in {"project", "mine"}:
         normalized_scope = "project"
@@ -163,9 +489,15 @@ def list_jobs(limit: int = 10, scope: str = "project") -> list[dict]:
     return result
 
 
-def get_job(job_id: str) -> Optional[dict]:
-    """获取单个任务元信息。"""
-    profile = get_current_user_profile()
+def get_job(job_id: str, profile: dict | None = None, *, enforce_group: bool = True) -> Optional[dict]:
+    """获取单个任务元信息。
+
+    enforce_group=True（默认，请求路径）：任务所属项目组必须等于调用方的激活项目组，
+    否则视为不存在（组间隔离）。
+    enforce_group=False：系统内部路径（如分支差异修复）不做组校验——修复是系统行为，
+    不应因调用方身份而跳过。
+    """
+    profile = profile or get_current_user_profile()
     with get_conn() as conn:
         row = conn.execute(
             "SELECT job_id, company_name, check_mode, owner_user_id, owner_display_name, project_group_id, project_group_name, "
@@ -177,7 +509,7 @@ def get_job(job_id: str) -> Optional[dict]:
     if not row:
         return None
     item = dict(row)
-    if (item.get("project_group_id") or CURRENT_PROJECT_GROUP_ID) != (
+    if enforce_group and (item.get("project_group_id") or CURRENT_PROJECT_GROUP_ID) != (
         profile.get("project_group_id") or CURRENT_PROJECT_GROUP_ID
     ):
         return None
@@ -1238,6 +1570,18 @@ def _has_template_marker(diff: Diff) -> bool:
     evidence_text = " ".join(ev.snippet or "" for ev in diff.evidence)
     compact = "".join(evidence_text.split())
     return any(marker in compact for marker in _LEGACY_TEMPLATE_MARKERS)
+
+
+def get_job_group_for_diff(diff_id: str) -> Optional[dict]:
+    """由 diff_id 反查所属任务的项目组/负责人——review 提交的组间隔离校验用。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT j.project_group_id, j.project_group_name, j.owner_user_id
+            FROM diffs d JOIN jobs j ON j.job_id = d.job_id
+            WHERE d.diff_id = ?""",
+            (diff_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def save_review(diff_id: str, status: ReviewStatus, note: str | None, reviewed_by: str | None) -> None:

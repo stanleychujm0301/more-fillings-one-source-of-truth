@@ -28,7 +28,7 @@ def _patch_report_job(monkeypatch, workspace_tmp: Path, job_id: str = "j-downloa
     monkeypatch.setattr(
         routes_job,
         "get_job",
-        lambda requested_job_id: {
+        lambda requested_job_id, **_: {
             "job_id": requested_job_id,
             "company_name": "Downloaded Project",
             "check_mode": "ah",
@@ -178,7 +178,7 @@ def test_job_detail_repairs_stored_branch_diffs_before_response(monkeypatch, wor
     a_file, h_file = _branch_repair_source_files(workspace_tmp)
     saved: list[object] = []
 
-    def fake_get_job(requested_job_id):
+    def fake_get_job(requested_job_id, **_kwargs):
         if requested_job_id != job_id:
             return None
         if saved:
@@ -223,7 +223,7 @@ def test_pdf_download_repairs_stored_branch_diffs_before_export(monkeypatch, wor
     a_file, h_file = _branch_repair_source_files(workspace_tmp)
     saved: list[object] = []
 
-    def fake_get_job(requested_job_id):
+    def fake_get_job(requested_job_id, **_kwargs):
         if requested_job_id != job_id:
             return None
         if saved:
@@ -269,7 +269,7 @@ def test_repair_branch_diffs_skips_when_already_in_progress(monkeypatch):
     (multi-second) source PDF re-parse repeatedly. If a repair for this job_id is already
     in-flight, a second call must return immediately without touching get_job at all."""
     calls: list[str] = []
-    monkeypatch.setattr(routes_job, "get_job", lambda job_id: calls.append(job_id) or None)
+    monkeypatch.setattr(routes_job, "get_job", lambda job_id, **_: calls.append(job_id) or None)
 
     routes_job._REPAIR_IN_PROGRESS.add("job-x")
     try:
@@ -284,7 +284,7 @@ def test_repair_branch_diffs_skips_when_already_in_progress(monkeypatch):
 def test_repair_branch_diffs_releases_in_progress_marker_after_run(monkeypatch):
     """The in-flight marker must be released once the repair attempt finishes (success,
     no-op, or failure), so a later poll can retry."""
-    monkeypatch.setattr(routes_job, "get_job", lambda job_id: None)
+    monkeypatch.setattr(routes_job, "get_job", lambda job_id, **_: None)
 
     result = routes_job._repair_branch_diffs_if_needed("job-y")
 

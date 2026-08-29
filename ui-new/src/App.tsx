@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import kpmgLogo from './assets/kpmg-logo.svg'
 import './App.css'
+import { apiUrl, fetchJson, isAuthError, setUnauthorizedHandler } from './api'
+import { AuthPage } from './AuthPage'
+import { GroupManagerPanel, GroupSwitcher } from './groups'
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -70,7 +73,7 @@ import type { DiffSourceScope, DiffTriageScope } from './format'
 import { useCountUpText } from './useCountUp'
 
 type Route = {
-  page: 'cockpit' | 'history' | 'job' | 'profile'
+  page: 'cockpit' | 'history' | 'job' | 'profile' | 'login' | 'register'
   jobId?: string
 }
 
@@ -88,9 +91,16 @@ export type CurrentUser = {
   project_group: ProjectGroup
 }
 
-type SessionPayload = {
+export type GroupMembership = {
+  group_id: string
+  group_name: string
+  is_active: boolean
+}
+
+export type SessionPayload = {
   user: CurrentUser
   project_group: ProjectGroup
+  memberships?: GroupMembership[]
 }
 
 type HealthPayload = {
@@ -286,7 +296,6 @@ export type UploadErrors = {
 export type UploadErrorField = keyof UploadErrors
 
 const DEFAULT_USER_LABEL = 'Chu, Stanley (SH/FS3)'
-const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/+$/, '')
 const EMPTY_UPLOAD: UploadState = {
   companyName: '',
   checkMode: 'ah',
@@ -304,6 +313,8 @@ function parseRoute(): Route {
     }
     if (hash === '#/history') return { page: 'history' }
     if (hash === '#/profile') return { page: 'profile' }
+    if (hash === '#/login') return { page: 'login' }
+    if (hash === '#/register') return { page: 'register' }
     return { page: 'cockpit' }
   } catch {
     // Malformed percent-encoding in the hash (e.g. "#/jobs/%zz") throws a
@@ -315,44 +326,8 @@ function parseRoute(): Route {
   }
 }
 
-function apiUrl(url: string): string {
-  if (!API_ORIGIN || /^https?:\/\//i.test(url)) return url
-  return `${API_ORIGIN}${url.startsWith('/') ? url : `/${url}`}`
-}
-
-// Thrown by fetchJson when the browser's own `fetch` call rejects (backend unreachable,
-// DNS failure, offline, CORS preflight failure, etc.) rather than when the backend
-// responds with a non-2xx status. Callers use this to distinguish "network is down" from
-// a normal HTTP error so they can show a calmer, non-spammy connection indicator instead
-// of an error banner (see the job-detail polling loop and the api-status pill).
-class NetworkUnavailableError extends Error {}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(apiUrl(url), init)
-  } catch (err) {
-    // The browser throws a plain TypeError ("Failed to fetch" / "NetworkError when
-    // attempting to fetch resource") when the request never reaches a server at all.
-    // Surfacing that raw English message directly to users is not useful; wrap it in a
-    // clear Chinese explanation instead.
-    if (err instanceof TypeError) {
-      throw new NetworkUnavailableError('后端连接中断，请检查网络或稍后重试。')
-    }
-    throw err
-  }
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`
-    try {
-      const payload = (await response.json()) as { detail?: string }
-      detail = payload.detail || detail
-    } catch {
-      detail = response.statusText || detail
-    }
-    throw new Error(detail)
-  }
-  return response.json() as Promise<T>
-}
+// The fetch layer (apiUrl / NetworkUnavailableError / HttpError / fetchJson with
+// credentials + global 401 handling) lives in ./api — shared with AuthPage and groups.
 
 function reportUrl(jobId: string, extension: 'pdf' | 'html'): string {
   return apiUrl(`/api/jobs/${encodeURIComponent(jobId)}/report.${extension}`)
@@ -479,6 +454,17 @@ function App() {
   }, [])
 
   useEffect(() => {
+    // Global 401 hook: any non-auth API that answers 401 (expired/absent session cookie)
+    // drops the session and routes to the login page. Registered once; fetchJson skips
+    // /api/auth/* so a failed login attempt stays a form-level error.
+    setUnauthorizedHandler(() => {
+      setSession(null)
+      window.location.hash = '#/login'
+    })
+    return () => setUnauthorizedHandler(null)
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     let retryTimeoutId: number | null = null
 
@@ -489,6 +475,9 @@ function App() {
         })
         .catch((err: unknown) => {
           if (cancelled) return
+          // 401 = not logged in / session expired: the global hook already routed to
+          // #/login — do NOT retry on a timer or flag the backend as disconnected.
+          if (isAuthError(err)) return
           setConnectionStatus('disconnected')
           setError(err instanceof Error ? err.message : String(err))
           // The session request is how the app first learns whether the backend is
@@ -514,7 +503,11 @@ function App() {
 
   useEffect(() => {
     if (route.page === 'history' || route.page === 'cockpit') {
-      loadHistory(historyScope).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      loadHistory(historyScope).catch((err: unknown) => {
+        // 401 is handled globally (redirect to #/login) — no error banner on top of that.
+        if (isAuthError(err)) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
     }
   }, [historyScope, loadHistory, route.page])
 
@@ -699,6 +692,76 @@ function App() {
     return <span className={`${className} avatar-fallback`}>{initials(session?.user)}</span>
   }
 
+  const handleAuthenticated = useCallback((payload: SessionPayload) => {
+    setSession(payload)
+    setProfileDraft({
+      display_name: payload.user.display_name,
+      office_line: payload.user.office_line,
+      role_title: payload.user.role_title || '',
+    })
+    setConnectionStatus('connected')
+    setError(null)
+    setMessage(null)
+    window.location.hash = '#/cockpit'
+  }, [])
+
+  async function logout() {
+    if (busy === 'logout') return
+    setBusy('logout')
+    try {
+      await fetchJson('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // Even if the backend is unreachable, drop the local session state — the expired
+      // cookie will simply fail validation on the next request.
+    }
+    setBusy(null)
+    setSession(null)
+    setHistory([])
+    setJob(null)
+    window.location.hash = '#/login'
+  }
+
+  async function switchProjectGroup(groupId: string) {
+    if (!session || groupId === session.project_group.id || busy === 'group') return
+    setBusy('group')
+    setError(null)
+    setMessage(null)
+    try {
+      const payload = await fetchJson<SessionPayload>('/api/session/active-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: groupId }),
+      })
+      setSession(payload)
+      setMessage(`已切换到 ${payload.project_group.name} 项目组，历史与共享范围已同步。`)
+      // Refresh whatever the user is looking at: group-scoped history everywhere, and —
+      // on a job detail page — reload the job. A job owned by the previous group now 404s
+      // and flows into the existing missing-job recovery, which makes the group isolation
+      // visible instead of showing a raw error.
+      loadHistory(historyScope).catch(() => {})
+      if (route.page === 'job' && route.jobId) {
+        loadJob(route.jobId).catch((err: unknown) => {
+          const detail = err instanceof Error ? err.message : String(err)
+          if (/job not found|404/i.test(detail)) {
+            handleMissingJob(route.jobId || '', detail)
+            return
+          }
+          if (!isAuthError(err)) setError(detail)
+        })
+      }
+    } catch (err) {
+      if (!isAuthError(err)) setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Login/register render as a standalone full-screen card without the app shell —
+  // the toolbar/nav would be meaningless (and leak group data) before authentication.
+  if (route.page === 'login' || route.page === 'register') {
+    return <AuthPage mode={route.page} session={session} onAuthenticated={handleAuthenticated} />
+  }
+
   return (
     <div className="shell">
       <header className="app-toolbar">
@@ -724,6 +787,7 @@ function App() {
           </a>
         </nav>
         <div className="toolbar-actions">
+          <GroupSwitcher session={session} busy={busy === 'group'} onSwitch={switchProjectGroup} />
           <a className="user-strip" href="#/profile">
             {avatarNode('nav-avatar')}
             <span>
@@ -731,6 +795,15 @@ function App() {
               <small>{session?.user.role_title || 'Senior manager'}</small>
             </span>
           </a>
+          <button
+            type="button"
+            className="ghost logout-button"
+            onClick={logout}
+            disabled={busy === 'logout'}
+            title="退出当前账号"
+          >
+            退出
+          </button>
           <span id="statusBadge" className={`api-status ${connectionStatus}`}>
             {connectionStatus === 'connected' ? (
               <CheckIcon size={13} />
@@ -788,6 +861,7 @@ function App() {
             scope={historyScope}
             setScope={setHistoryScope}
             history={history}
+            activeGroupName={session?.project_group.name || 'SH/FS3'}
           />
         )}
 
@@ -814,6 +888,8 @@ function App() {
             setAvatarFile={setAvatarFile}
             submitProfile={submitProfile}
             submitAvatar={submitAvatar}
+            onSessionUpdate={setSession}
+            onLogout={logout}
           />
         )}
       </main>
@@ -1143,10 +1219,12 @@ function HistoryPage({
   scope,
   setScope,
   history,
+  activeGroupName,
 }: {
   scope: 'project' | 'mine'
   setScope: (scope: 'project' | 'mine') => void
   history: JobSummary[]
+  activeGroupName: string
 }) {
   const summary = useMemo(() => {
     const done = history.filter((j) => j.status === 'done')
@@ -1172,7 +1250,7 @@ function HistoryPage({
       <div className="panel-head">
         <div>
           <p className="eyebrow">共享历史</p>
-          <h2>{scope === 'project' ? 'SH/FS3 项目组历史' : '我的核查历史'}</h2>
+          <h2>{scope === 'project' ? `${activeGroupName} 项目组历史` : '我的核查历史'}</h2>
           <p className="panel-copy">默认展示项目组共享历史，可切换查看当前用户提交的任务。</p>
         </div>
         <div className="segmented small">
@@ -1637,6 +1715,8 @@ function ProfilePage({
   setAvatarFile,
   submitProfile,
   submitAvatar,
+  onSessionUpdate,
+  onLogout,
 }: {
   session: SessionPayload | null
   draft: ProfileDraft
@@ -1647,6 +1727,8 @@ function ProfilePage({
   setAvatarFile: (file: File | null) => void
   submitProfile: (event: FormEvent<HTMLFormElement>) => void
   submitAvatar: (event: FormEvent<HTMLFormElement>) => void
+  onSessionUpdate: (session: SessionPayload) => void
+  onLogout: () => void
 }) {
   return (
     <section className="grid two-col profile-grid">
@@ -1655,7 +1737,7 @@ function ProfilePage({
           <div>
             <p className="eyebrow"><UserIcon size={12} />当前用户</p>
             <h2>{session?.user.display_name || 'Chu, Stanley'}</h2>
-            <p className="panel-copy">更新当前演示用户的展示信息，导航栏会同步显示。</p>
+            <p className="panel-copy">更新当前登录用户的展示信息，导航栏会同步显示。</p>
           </div>
           {avatarNode('profile-avatar')}
         </div>
@@ -1689,6 +1771,9 @@ function ProfilePage({
           {busy === 'profile' ? <SpinnerIcon size={15} className="spin" /> : <CheckIcon size={15} />}
           {busy === 'profile' ? '正在保存' : '保存资料'}
         </button>
+        <button type="button" className="ghost logout-button" onClick={onLogout} disabled={busy === 'logout'}>
+          退出登录
+        </button>
       </form>
 
       <form className="panel avatar-panel" onSubmit={submitAvatar}>
@@ -1714,6 +1799,8 @@ function ProfilePage({
           {busy === 'avatar' ? '正在上传' : '上传头像'}
         </button>
       </form>
+
+      <GroupManagerPanel session={session} onSessionUpdate={onSessionUpdate} />
     </section>
   )
 }
@@ -1729,7 +1816,7 @@ function JobRow({ item, table = false }: { item: JobSummary; table?: boolean }) 
           {detailLabel ? <small>{detailLabel}</small> : null}
           <div className="history-row-meta-line">
             <span className="mode-chip">{modeLabel(item.check_mode)}</span>
-            <span>{item.owner_display_name || 'Chu, Stanley'}</span>
+            <span>提交人：{item.owner_display_name || 'Chu, Stanley'}</span>
           </div>
         </div>
         <span className={statusClass(item.status)}>{statusLabel(item.status)}</span>

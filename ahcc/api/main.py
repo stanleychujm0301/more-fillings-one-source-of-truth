@@ -6,14 +6,17 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from loguru import logger
 
+from ahcc.api.deps import get_current_user
 from ahcc.api.job_runner import current_running_job_id, queued_job_ids
+from ahcc.api.routes_auth import router as auth_router
+from ahcc.api.routes_groups import router as group_router
 from ahcc.api.routes_job import router as job_router
 from ahcc.api.routes_review import router as review_router
 from ahcc.api.routes_user import router as user_router
@@ -139,6 +142,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_GATE_COOKIE = "ahcc_gate"
+
+
+@app.middleware("http")
+async def _public_gate(request: Request, call_next):
+    """答辩救急用的公网访问网关（见 config.Settings.api_auth_token 注释）。
+
+    未配置 AHCC_API_AUTH_TOKEN 时完全不生效，本地开发/测试/eval 行为不变。
+    """
+    token = settings.api_auth_token
+    if not token:
+        return await call_next(request)
+
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path != "/health":
+        cookie_ok = request.cookies.get(_GATE_COOKIE) == token
+        header_ok = request.headers.get("x-api-key") == token
+        if not (cookie_ok or header_ok):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    response = await call_next(request)
+    if request.method == "GET" and request.cookies.get(_GATE_COOKIE) != token:
+        response.set_cookie(_GATE_COOKIE, token, samesite="lax", path="/", max_age=86400)
+    return response
+
 
 @app.get("/health")
 def health() -> dict:
@@ -216,9 +243,13 @@ def index_html() -> FileResponse:
     return _no_cache_ui_new_index()
 
 
-app.include_router(job_router, prefix="/api/jobs", tags=["jobs"])
-app.include_router(review_router, prefix="/api/reviews", tags=["reviews"])
-app.include_router(user_router, prefix="/api", tags=["users"])
+# /api/auth/* 为公开端点（注册/登录/登出/组候选列表）；其余 API router 统一经
+# get_current_user 依赖鉴权（未登录 401）。/health 与静态资源不在受保护 router 下，天然放行。
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(job_router, prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(get_current_user)])
+app.include_router(review_router, prefix="/api/reviews", tags=["reviews"], dependencies=[Depends(get_current_user)])
+app.include_router(user_router, prefix="/api", tags=["users"], dependencies=[Depends(get_current_user)])
+app.include_router(group_router, prefix="/api/groups", tags=["groups"], dependencies=[Depends(get_current_user)])
 
 if (UI_NEW_DIST / "assets").is_dir():
     app.mount("/app/assets", StaticFiles(directory=str(UI_NEW_DIST / "assets")), name="ui-new-assets")
