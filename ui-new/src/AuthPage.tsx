@@ -267,7 +267,7 @@ export function AuthPage({
           <a href={isRegister ? '#/login' : '#/register'}>{isRegister ? '去登录' : '去注册'}</a>
         </p>
         <p className="auth-demo-hint">
-          演示账号：chu-stanley / demo1234（同组同事 chen-yiran、异组 zhang-wei，密码相同）
+          演示账号：chu-stanley / demo1234（同组同事 yu-jill、异组 ni-andrew，密码相同）
         </p>
       </section>
     </div>

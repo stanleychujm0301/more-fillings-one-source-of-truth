@@ -155,6 +155,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_job_columns(conn)
     _ensure_user_profile_columns(conn)
+    _rename_legacy_demo_accounts(conn)
     _seed_demo_accounts(conn)
     _backfill_memberships(conn)
     _backfill_job_ownership(conn)
@@ -200,8 +201,8 @@ def _ensure_user_profile_columns(conn: sqlite3.Connection) -> None:
 # ============ 演示账号种子（注册登录落地后替代单一演示用户） ============
 # 统一演示密码，覆盖三条演示动线：
 #   1. chu-stanley 同时属于 SH/FS3 与 SH/IPO 专项 —— 同一人多组切换
-#   2. chen-yiran 与 chu-stanley 同组 —— 组内结果共享
-#   3. zhang-wei 在 BJ/FS1 —— 组间隔离（看不到 sh-fs3 的任务）
+#   2. yu-jill 与 chu-stanley 同组 —— 组内结果共享
+#   3. ni-andrew 在 BJ/FS1 —— 组间隔离（看不到 sh-fs3 的任务）
 _DEMO_PASSWORD = "demo1234"
 _DEMO_GROUPS: list[tuple[str, str]] = [
     ("sh-fs3", "SH/FS3"),
@@ -218,21 +219,29 @@ _DEMO_ACCOUNTS: list[dict[str, object]] = [
         "memberships": ("sh-fs3", "sh-ipo"),
     },
     {
-        "user_id": "chen-yiran",
-        "display_name": "Chen, Yiran",
+        "user_id": "yu-jill",
+        "display_name": "Yu, Jill",
         "office_line": "SH/FS3",
         "role_title": "Audit Associate",
         "project_group_id": "sh-fs3",
         "memberships": ("sh-fs3",),
     },
     {
-        "user_id": "zhang-wei",
-        "display_name": "Zhang, Wei",
+        "user_id": "ni-andrew",
+        "display_name": "Ni, Andrew",
         "office_line": "BJ/FS1",
         "role_title": "Audit Manager",
         "project_group_id": "bj-fs1",
         "memberships": ("bj-fs1",),
     },
+]
+
+# 演示账号改名历史：老库里已经种入过旧 user_id，必须在种子之前就地改名，
+# 否则新旧两套账号会同时存在（项目组成员数翻倍，演示时对不上）。
+_RENAMED_DEMO_ACCOUNTS: list[tuple[str, str, str]] = [
+    # (旧 user_id, 新 user_id, 新 display_name)
+    ("chen-yiran", "yu-jill", "Yu, Jill"),
+    ("zhang-wei", "ni-andrew", "Ni, Andrew"),
 ]
 
 
@@ -282,6 +291,50 @@ def _seed_demo_accounts(conn: sqlite3.Connection) -> None:
                 (user_id, group_id),
             )
     _backfill_demo_passwords(conn)
+
+
+def _rename_legacy_demo_accounts(conn: sqlite3.Connection) -> None:
+    """把改名前种入的演示账号就地改名，连同其任务、成员关系、会话与复核署名一起迁移。
+
+    必须在 _seed_demo_accounts 之前调用：种子用 INSERT OR IGNORE，若新账号先被插入，
+    这里的改名会撞上主键冲突，老库便会同时留下新旧两套账号。
+    """
+    for old_id, new_id, new_display_name in _RENAMED_DEMO_ACCOUNTS:
+        old = conn.execute(
+            "SELECT display_name FROM user_profiles WHERE user_id = ?", (old_id,)
+        ).fetchone()
+        if old is None:
+            continue
+        exists = conn.execute(
+            "SELECT 1 FROM user_profiles WHERE user_id = ?", (new_id,)
+        ).fetchone()
+        if exists:
+            # 新账号已存在（改名后又被种子重新插入过旧行等异常情形）：丢弃旧行，
+            # 保留新账号，避免项目组里出现两个同一个人。
+            conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", (old_id,))
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (old_id,))
+            conn.execute("DELETE FROM user_profiles WHERE user_id = ?", (old_id,))
+            continue
+
+        old_display_name = old["display_name"]
+        conn.execute(
+            "UPDATE user_profiles SET user_id = ?, display_name = ? WHERE user_id = ?",
+            (new_id, new_display_name, old_id),
+        )
+        conn.execute(
+            "UPDATE user_group_memberships SET user_id = ? WHERE user_id = ?", (new_id, old_id)
+        )
+        conn.execute("UPDATE sessions SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+        conn.execute("UPDATE project_groups SET created_by = ? WHERE created_by = ?", (new_id, old_id))
+        conn.execute(
+            "UPDATE jobs SET owner_user_id = ?, owner_display_name = ? WHERE owner_user_id = ?",
+            (new_id, new_display_name, old_id),
+        )
+        # reviews 存的是展示名而非 user_id，一并迁移，历史复核记录的署名才不会停在旧名字
+        conn.execute(
+            "UPDATE reviews SET reviewed_by = ? WHERE reviewed_by = ?",
+            (new_display_name, old_display_name),
+        )
 
 
 def _backfill_demo_passwords(conn: sqlite3.Connection) -> None:

@@ -68,7 +68,7 @@ def test_init_db_seeds_demo_accounts_groups_and_memberships(monkeypatch, workspa
 
     assert {"sessions", "project_groups", "user_group_memberships"} <= tables
     # 三个演示账号，密码哈希三要素齐备
-    assert [row["user_id"] for row in users] == ["chen-yiran", "chu-stanley", "zhang-wei"]
+    assert [row["user_id"] for row in users] == ["chu-stanley", "ni-andrew", "yu-jill"]
     for row in users:
         assert row["password_hash"]
         assert row["password_salt"]
@@ -80,10 +80,10 @@ def test_init_db_seeds_demo_accounts_groups_and_memberships(monkeypatch, workspa
         ("sh-ipo", "SH/IPO 专项"),
     ]
     assert [(row["user_id"], row["group_id"]) for row in memberships] == [
-        ("chen-yiran", "sh-fs3"),
         ("chu-stanley", "sh-fs3"),
         ("chu-stanley", "sh-ipo"),
-        ("zhang-wei", "bj-fs1"),
+        ("ni-andrew", "bj-fs1"),
+        ("yu-jill", "sh-fs3"),
     ]
     # 种子密码可登录（大小写不敏感）
     profile = repository.verify_user_credentials("CHU-Stanley", "demo1234")

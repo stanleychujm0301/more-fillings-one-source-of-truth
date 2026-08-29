@@ -5,8 +5,8 @@ monkeypatch.setattr(settings, "auth_disabled", False) 显式打开真实认证�
 
 种子数据（models._seed_demo_accounts，密码均为 demo1234）：
 - chu-stanley：SH/FS3 + SH/IPO 专项（一人多组）
-- chen-yiran：SH/FS3（stanley 的同组同事）
-- zhang-wei：BJ/FS1（异组，用于隔离验证）
+- yu-jill：SH/FS3（stanley 的同组同事）
+- ni-andrew：BJ/FS1（异组，用于隔离验证）
 """
 
 from __future__ import annotations
@@ -260,8 +260,8 @@ def test_group_sharing_between_colleagues(auth_client):
     assert "stanley-job" in {item["job_id"] for item in project.json()}
     auth_client.post("/api/auth/logout")
 
-    # 同组同事 chen-yiran：项目组历史可见、详情可读
-    assert _login(auth_client, "chen-yiran").status_code == 200
+    # 同组同事 yu-jill：项目组历史可见、详情可读
+    assert _login(auth_client, "yu-jill").status_code == 200
     project = auth_client.get("/api/jobs/history?scope=project&limit=10")
     assert {item["job_id"] for item in project.json()} == {"stanley-job"}
     assert project.json()[0]["owner_display_name"] == "Chu, Stanley"
@@ -275,7 +275,7 @@ def test_cross_group_isolation(auth_client):
     _seed_job("stanley-job", "chu-stanley", "Chu, Stanley", "sh-fs3", "SH/FS3")
     _seed_diff("stanley-diff", "stanley-job")
 
-    assert _login(auth_client, "zhang-wei").status_code == 200
+    assert _login(auth_client, "ni-andrew").status_code == 200
     # 历史为空
     assert auth_client.get("/api/jobs/history?scope=project&limit=10").json() == []
     # 详情 / diffs / 报告下载全部 404（不区分不存在与无权访问）
@@ -291,14 +291,14 @@ def test_cross_group_isolation(auth_client):
 
     # 同组同事可以正常 review，reviewed_by 默认当前登录用户
     auth_client.post("/api/auth/logout")
-    assert _login(auth_client, "chen-yiran").status_code == 200
+    assert _login(auth_client, "yu-jill").status_code == 200
     ok = auth_client.post("/api/reviews/", json={"diff_id": "stanley-diff", "status": "reviewed"})
     assert ok.status_code == 200
     with models.get_conn() as conn:
         row = conn.execute(
             "SELECT reviewed_by FROM reviews WHERE diff_id = ?", ("stanley-diff",)
         ).fetchone()
-    assert row["reviewed_by"] == "Chen, Yiran"
+    assert row["reviewed_by"] == "Yu, Jill"
 
 
 # ── 4. 一人多组切换 ────────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ def test_active_group_persists_across_sessions(auth_client):
 
 
 def test_join_group_is_idempotent_and_switches_active(auth_client):
-    assert _login(auth_client, "chen-yiran").status_code == 200
+    assert _login(auth_client, "yu-jill").status_code == 200
 
     first = auth_client.post("/api/groups/join", json={"mode": "join", "group_id": "sh-ipo"})
     assert first.status_code == 200
@@ -384,7 +384,7 @@ def test_join_group_is_idempotent_and_switches_active(auth_client):
 
 
 def test_join_group_create_mode(auth_client):
-    assert _login(auth_client, "zhang-wei").status_code == 200
+    assert _login(auth_client, "ni-andrew").status_code == 200
     created = auth_client.post("/api/groups/join", json={"mode": "create", "group_name": "GZ/FS2"})
     assert created.status_code == 200
     assert created.json()["already_member"] is False
@@ -444,7 +444,7 @@ def test_legacy_users_without_memberships_are_backfilled(auth_client, monkeypatc
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             ("legacy-user", "Legacy User", "SH/FS3", "Audit Associate", "", "sh-fs3", "SH/FS3", ""),
         )
-        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("chen-yiran",))
+        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("yu-jill",))
         conn.commit()
 
     models.init_db()  # 重跑 schema 链条（init_db 不受 once-per-path 守卫限制）
@@ -452,12 +452,65 @@ def test_legacy_users_without_memberships_are_backfilled(auth_client, monkeypatc
     with models.get_conn() as conn:
         rows = conn.execute(
             "SELECT user_id, group_id FROM user_group_memberships WHERE user_id IN (?, ?) ORDER BY user_id",
-            ("legacy-user", "chen-yiran"),
+            ("legacy-user", "yu-jill"),
         ).fetchall()
     assert [(row["user_id"], row["group_id"]) for row in rows] == [
-        ("chen-yiran", "sh-fs3"),
         ("legacy-user", "sh-fs3"),
+        ("yu-jill", "sh-fs3"),
     ]
+
+
+def test_renamed_demo_accounts_migrate_in_place(auth_client):
+    """演示账号改名（chen-yiran→yu-jill、zhang-wei→ni-andrew）：老库里的旧账号必须
+    就地改名并带走其数据，而不是与新账号并存——否则项目组成员数翻倍。"""
+    # 构造改名前的老库：删掉新账号，插回旧账号 + membership + 一条其名下的任务
+    with models.get_conn() as conn:
+        conn.execute("DELETE FROM user_group_memberships WHERE user_id = ?", ("yu-jill",))
+        conn.execute("DELETE FROM user_profiles WHERE user_id = ?", ("yu-jill",))
+        conn.execute(
+            """INSERT INTO user_profiles
+            (user_id, display_name, office_line, role_title, avatar_path,
+             project_group_id, project_group_name, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("chen-yiran", "Chen, Yiran", "SH/FS3", "Audit Associate", "", "sh-fs3", "SH/FS3", ""),
+        )
+        conn.execute(
+            "INSERT INTO user_group_memberships (user_id, group_id, joined_at) VALUES (?, ?, datetime('now'))",
+            ("chen-yiran", "sh-fs3"),
+        )
+        conn.commit()
+    _seed_job("legacy-owned", "chen-yiran", "Chen, Yiran", "sh-fs3", "SH/FS3")
+
+    models.init_db()  # 重跑 schema 链条，触发改名迁移
+
+    with models.get_conn() as conn:
+        old = conn.execute(
+            "SELECT 1 FROM user_profiles WHERE user_id = ?", ("chen-yiran",)
+        ).fetchone()
+        new = conn.execute(
+            "SELECT display_name, office_line FROM user_profiles WHERE user_id = ?", ("yu-jill",)
+        ).fetchone()
+        membership_users = [
+            row["user_id"]
+            for row in conn.execute(
+                "SELECT user_id FROM user_group_memberships WHERE group_id = ? ORDER BY user_id",
+                ("sh-fs3",),
+            ).fetchall()
+        ]
+        job = conn.execute(
+            "SELECT owner_user_id, owner_display_name FROM jobs WHERE job_id = ?", ("legacy-owned",)
+        ).fetchone()
+
+    assert old is None, "旧账号必须被改名而不是与新账号并存"
+    assert new["display_name"] == "Yu, Jill"
+    assert new["office_line"] == "SH/FS3"
+    # SH/FS3 仍是两人（stanley + jill），没有因改名多出一个成员
+    assert membership_users == ["chu-stanley", "yu-jill"]
+    # 旧账号名下的任务跟着迁移，不会变成孤儿
+    assert job["owner_user_id"] == "yu-jill"
+    assert job["owner_display_name"] == "Yu, Jill"
+    # 改名后仍可用统一演示密码登录
+    assert _login(auth_client, "yu-jill").status_code == 200
 
 
 # ── 7. 旁路一致性 ──────────────────────────────────────────────────────────
