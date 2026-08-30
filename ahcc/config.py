@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     numeric_llm_review_min_confidence: float = 0.80
     event_use_llm_semantic_review: bool = True
     event_llm_review_min_confidence: float = 0.80
+    # 取数精度护栏（Phase 1）。全部可单独关闭以回退到旧行为。
+    # strict_binding：未命中术语表的标签不再造 canonical_key；同一 (页,值) 只归属一个科目。
+    extraction_strict_binding: bool = True
+    # 公告目录 / 董监高简历 / 章节索引不参与指标抽取
+    extraction_skip_non_financial_segments: bool = True
+    # 单个 canonical_key 保留的 occurrence 上限（一个报表行项目最多本期/上期/母公司两列）
+    extraction_max_occurrences_per_key: int = 24
+    # 一行表格最多取几个值。附注表常有「账面余额/占比/损失准备/占比/账面价值」等多列，
+    # 取 8 兼顾覆盖与防跑飞；真正的行边界由「遇到下一个标签即停」保证。
+    extraction_max_values_per_row: int = 8
+
     enable_standard_check: bool = False
     enable_disclosure_coverage_check: bool = False
     enable_a_share_table_extraction: bool = False

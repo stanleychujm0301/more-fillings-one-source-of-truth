@@ -816,6 +816,13 @@ def _pair_for_score(key: str, pair_score: _PairScore, alignment_confidence: floa
 
 
 def _pair_match_kind(key: str, pair_score: _PairScore, rules: list[RuleDef], currency_factor: float | None) -> str | None:
+    # 数值相等先判，且不受口径兼容性约束 —— 口径只在**确实存在差异**时才需要讨论。
+    # 原实现在 context 不兼容时直接 return None，于是 A/H 数值完全相同的候选也会
+    # 落到 _make_unresolved_candidate_diff，产出「口径不兼容，暂不判定」的待复核项。
+    # 实测光大银行 A/H 有 22 条这样的零信息量条目（A 与 H 一模一样却要人去复核）。
+    if pair_score.direct_ratio <= 1e-9:
+        return "direct"
+
     if not pair_score.context_compatible:
         return None
 

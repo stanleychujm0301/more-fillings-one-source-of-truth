@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """把 finals-deck.html 打包成单文件离线版：所有 assets/*.png 内嵌为 base64 data URI。
-产出 finals-deck-offline.html —— 演示电脑只需拷贝这一个文件，图片零丢失风险。"""
+产出 finals-deck-standalone.html —— 演示电脑只需拷贝这一个文件，图片零丢失风险。"""
 import base64
 import re
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 SRC = HERE / "finals-deck.html"
-OUT = HERE / "finals-deck-offline.html"
+OUT = HERE / "finals-deck-standalone.html"
 
 html = SRC.read_text(encoding="utf-8")
 

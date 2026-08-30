@@ -8,6 +8,9 @@ build/
 dist/
 *.egg-info/
 .installed.cfg
+
+# 调研缓存（抓取的网页，非产品代码）
+.research/
 *.egg
 
 # 虚拟环境

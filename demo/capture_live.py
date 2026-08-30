@@ -105,8 +105,9 @@ crop = src.crop((x0, y0, x1, y1))
 crop.save(os.path.join(ASSETS, "evidence-numeric-crop.png"))
 print("evidence-numeric-crop.png saved", crop.size, "aspect %.3f" % (crop.width / crop.height))
 
-# 6. pad both full evidence screenshots to the S15 grid cell aspect (~2.15) with the
+# 6. pad both full evidence screenshots to the S16 grid cell aspect (~2.15) with the
 #    modal-backdrop gray, plus top headroom so the cell tag doesn't cover dialog titles
+#    注：S16 已扩为 3×2 六宫格（cell 约 1.5），重截时此 padding 可省略，1.78 原图直接裁剪即可
 for name in ("evidence-numeric.png", "evidence-expected.png"):
     src = Image.open(os.path.join(ASSETS, name)).convert("RGB")
     w, h = src.size

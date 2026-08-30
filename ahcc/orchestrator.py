@@ -161,6 +161,7 @@ class Orchestrator:
                 *branch_diffs,
             ]
             job.diffs = self._dedupe_overlay_shadows(job.diffs)
+            job.diffs = self._dedupe_identical_diffs(job.diffs)
 
             # ---------- 阶段 4：报告 ----------
             # 先结算汇总与耗时，再生成报告 —— 确保报告内「核查耗时/生成时间/提取预警」取到真实值
@@ -372,6 +373,43 @@ class Orchestrator:
         diffs, diagnostics = await asyncio.to_thread(run_branch_checks, a_file, h_file)
         self._branch_diagnostics = diagnostics
         return diffs
+
+    @staticmethod
+    def _dedupe_identical_diffs(diffs: list) -> list:
+        """合并完全相同的差异：同 rule_id + 同 canonical_key + 同 A/H 取值。
+
+        `key_metric_tamper._exact_cross_report_mismatches` 对同一 key 做 A×H 笛卡尔积
+        并产出前 N 条候选，同一指标在多页重复出现时会生成若干条**内容完全一样**的差异
+        （实测光大银行 `commission_net A=20,360,000,000 H=20,252,000,000` 重复 5 次，
+        全任务 33 条纯冗余）。这里只做严格意义上的重复合并 —— 取值不同的候选一律保留。
+        """
+        best: dict[tuple, object] = {}
+        order: list[tuple] = []
+        duplicates = 0
+        for diff in diffs:
+            marker = (
+                diff.rule_id or "",
+                diff.canonical_key or "",
+                round(diff.a_value, 4) if diff.a_value is not None else None,
+                round(diff.h_value, 4) if diff.h_value is not None else None,
+            )
+            # 没有取值的差异（披露/事件类）不参与合并，避免误伤
+            if marker[2] is None and marker[3] is None:
+                order.append(("__keep__", id(diff)))
+                best[("__keep__", id(diff))] = diff
+                continue
+            existing = best.get(marker)
+            if existing is None:
+                best[marker] = diff
+                order.append(marker)
+                continue
+            duplicates += 1
+            # 保留证据更完整的那条
+            if len(diff.evidence or []) > len(existing.evidence or []):
+                best[marker] = diff
+        if duplicates:
+            logger.info(f"合并完全重复的差异 {duplicates} 条")
+        return [best[m] for m in order]
 
     @staticmethod
     def _dedupe_overlay_shadows(diffs: list) -> list:

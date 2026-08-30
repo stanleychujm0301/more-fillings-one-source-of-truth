@@ -60,38 +60,58 @@ def _parse_number(text: str) -> Optional[float]:
         return None
 
 
-def _find_first_number(text: str, min_abs: float = 1000.0) -> tuple[Optional[float], Optional[str]]:
+def _find_first_number(
+    text: str,
+    min_abs: float = 1000.0,
+    *,
+    allow_small: bool = True,
+) -> tuple[Optional[float], Optional[str]]:
     """在文本中找到第一个有效的财务金额。
 
     跳过：
     - 年份 (1990-2035)
     - 小整数 (1-50，可能是附注编号)
     - 百分比（数字后面紧跟 %）
+
+    两轮扫描：第一轮偏好「含千分位或达到 min_abs」的数值；都没有时第二轮放宽
+    量级要求，返回第一个数字。
+
+    关键修正：**两轮都要过年份/附注号/百分比的过滤**。原实现的第二轮不做任何
+    过滤，把第一轮刻意跳过的年份、附注号又原样放了回来 —— 实测让「12月31日」
+    的 12、附注号 5 被抽成 customer_loans / net_profit 等科目的金额，
+    是取数噪声的主要来源之一。放宽的应该只是量级偏好，不是数据质量判据。
+
+    `allow_small=False` 可完全关掉第二轮（调用方明确只要大额时用）。
     """
-    for match in _NUMBER_RE.finditer(text):
-        raw = match.group()
-        val = _parse_number(raw)
-        if val is None:
-            continue
-        # 跳过年份
-        if 1990 <= val <= 2035 and "." not in raw:
-            continue
-        # 跳过小整数（附注编号）
-        if 1 <= val <= 50 and "," not in raw and "." not in raw:
-            continue
-        # 跳过百分比
-        end_pos = match.end()
-        if end_pos < len(text) and text[end_pos] == "%":
-            continue
-        # 优先选含逗号或大数值
+
+    def _candidates():
+        for match in _NUMBER_RE.finditer(text):
+            raw = match.group()
+            val = _parse_number(raw)
+            if val is None:
+                continue
+            # 跳过年份。带千分位的数字一定是金额 —— 年份不会写成 "2,000"，
+            # 漏掉这个条件会把 1990~2035 区间内的真实金额当年份丢掉。
+            if 1990 <= val <= 2035 and "." not in raw and "," not in raw:
+                continue
+            # 跳过小整数（附注编号）
+            if 1 <= val <= 50 and "," not in raw and "." not in raw:
+                continue
+            # 跳过百分比
+            end_pos = match.end()
+            if end_pos < len(text) and text[end_pos] == "%":
+                continue
+            yield val, raw
+
+    # 第一轮：优先选含逗号或大数值
+    for val, raw in _candidates():
         if "," in raw or abs(val) >= min_abs:
             return val, raw
-    # 如果都太小，返回第一个找到的数字
-    for match in _NUMBER_RE.finditer(text):
-        raw = match.group()
-        val = _parse_number(raw)
-        if val is not None:
-            return val, raw
+    if not allow_small:
+        return None, None
+    # 第二轮：放宽量级偏好，但仍然只接受通过质量过滤的数字
+    for val, raw in _candidates():
+        return val, raw
     return None, None
 
 
@@ -102,6 +122,196 @@ def _to_snake_case(text: str) -> str:
     # 连续下划线合并
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     return cleaned or "unknown_metric"
+
+
+# ============================================================
+# 取数精度护栏（Phase 1）
+#
+# 背景：实测 A 侧 4218 条 occurrence 里 21% 的 (页码,数值) 位置被绑定到多个
+# canonical_key —— 年份 2025 绑到 35 个公告标题上、董事简历被当成财务指标、
+# 「12月31日」的 12 绑到客户贷款上。下游所有噪声都是这个的后果。
+# ============================================================
+
+# 明确的非财务区域。命中这些的文本段不参与指标抽取 —— 公告目录、董监高简历、
+# 章节索引里没有需要 A/H 比对的报表数字，却贡献了大量伪 canonical_key。
+_NON_FINANCIAL_SEGMENT_MARKERS = (
+    "公告", "決議", "决议", "简历", "簡歷", "履历", "履歷",
+    "任职资格", "任職資格", "聘任", "辞任", "辭任", "提名",
+    "释义", "釋義", "目录", "目錄", "索引",
+    "先生", "女士", "出生于", "出生於", "毕业于", "畢業於",
+)
+
+# 这些词一旦出现，说明该段确实是财务内容，即使同时命中了上面的负向词也要保留
+# （例如「附注」里讨论关联交易公告的金额）。
+_FINANCIAL_OVERRIDE_MARKERS = (
+    "资产总计", "資產總計", "负债合计", "負債合計", "营业收入", "營業收入",
+    "净利润", "淨利潤", "利润总额", "利潤總額", "现金流量", "現金流量",
+    "资产负债表", "資產負債表", "利润表", "利潤表", "所有者权益", "股东权益",
+    "合并报表", "合併報表", "单位：人民币", "單位：人民幣",
+)
+
+# 绑定强度：数字与标签的结合有多可信。用于同一 (页,值) 位置多重绑定时择一。
+BINDING_TABLE = 100          # 结构化表格单元格
+BINDING_LABELED_INLINE = 60  # 正则命中的「标签 数字」同行模式
+BINDING_RAW_TABLE = 80       # 文本层还原出的表格行（半结构化）
+BINDING_GLOSSARY_WINDOW = 30  # 术语表命中后在窗口里就近取数
+BINDING_OVERLAY = 20         # 视觉叠加层候选
+
+
+def _segment_is_non_financial(seg: TextSegment) -> bool:
+    """判断该文本段是否属于明确的非财务区域。"""
+    text = to_simplified((seg.text or seg.raw_text or "")[:400])
+    if any(marker in text for marker in _FINANCIAL_OVERRIDE_MARKERS):
+        return False
+    return any(marker in text for marker in _NON_FINANCIAL_SEGMENT_MARKERS)
+
+
+def _is_date_or_note_number(value: float, raw: str) -> bool:
+    """1~31 的裸整数在金额类科目上几乎必然是日期或附注号，不是金额。
+
+    实测 `customer_loans` 的取值里混着 12 与 31（来自「12月31日」），
+    A 侧 6.2% / H 侧 15.7% 的 occurrence 属于这一类。
+    """
+    if "," in raw or "." in raw:
+        return False
+    if value != int(value):
+        return False
+    return 1 <= abs(value) <= 31
+
+
+def _resolve_binding_conflicts(items: list[MetricItem]) -> list[MetricItem]:
+    """同一个 (页码, 数值) 位置只能属于一个科目。
+
+    现状是每个 glossary 术语各自在自己的窗口里取数，窗口互相重叠，于是同一个
+    数字被同时绑到几十个 key 上（实测 P154 的 2025 绑到 35 个 key）。
+    这里按绑定强度择一，强度相同则取标签更具体（更长）的那个。
+    """
+    best: dict[tuple, MetricItem] = {}
+    order: list[tuple] = []
+    for item in items:
+        if item.value is None:
+            continue
+        # 视觉叠加层候选豁免：它们的存在意义就是「可见值与文本层不一致」，
+        # 必须与同页文本层取值共存，否则叠加篡改检测直接失效。
+        marker = (item.page, round(float(item.value), 4), _is_overlay_item(item))
+        current = best.get(marker)
+        if current is None:
+            best[marker] = item
+            order.append(marker)
+            continue
+        if _binding_rank(item) > _binding_rank(current):
+            best[marker] = item
+    # 保留原始顺序，避免下游依赖顺序的逻辑发生漂移
+    return [best[m] for m in order]
+
+
+def _matched_inside_more_specific_label(text: str, idx: int, matched_label: str, key: str) -> bool:
+    """命中的术语是否只是某个更长标签的尾部。
+
+    例：`净利润` 命中在 `归属于上市公司股东的净利润` 内部 —— 若不判别，
+    归母净利润的数值会被挂到 net_profit 上，A/H 两侧再各自挂错就成了假差异。
+    """
+    start = idx
+    while start > 0 and re.match(r"[一-龥]", text[start - 1]):
+        start -= 1
+    if start == idx:
+        return False
+    extended = text[start:idx + len(matched_label)]
+    if len(extended) <= len(matched_label):
+        return False
+    extended_key = glossary.lookup(extended) or glossary.lookup(to_simplified(extended))
+    return bool(extended_key) and extended_key != key
+
+
+def _is_overlay_item(item: MetricItem) -> bool:
+    snippet = (item.evidence.snippet if item.evidence else "") or ""
+    return "visual overlay" in snippet.lower()
+
+
+def _binding_rank(item: MetricItem) -> tuple[int, float, int]:
+    """绑定强度 → 置信度 → 标签具体程度（越长越具体）。"""
+    label = item.name.zh or item.name.en or ""
+    return (item.binding_strength, item.confidence, len(label))
+
+
+# 章节可信度：主表 > 附注 > 其他。主表里的取值是该指标的权威口径。
+_SECTION_WEIGHT = {
+    "bs": 3, "pl": 3, "cf": 3, "income": 3, "cash_flow": 3, "equity": 3,
+    "financial_statements": 3,
+    "notes": 2,
+}
+
+
+def _occurrence_rank(item: MetricItem) -> tuple:
+    """occurrence 的可信度排序键，用于挑 primary 与截断。
+
+    顺序：绑定强度 → 结构化程度 → 章节权重 → 抽取置信度 → 数值大小（仅 tie-break）。
+    """
+    section = (item.evidence.section if item.evidence else "") or ""
+    structural = 2 if item.source == "table" else (1 if item.source == "text" else 0)
+    return (
+        item.binding_strength,
+        structural,
+        _SECTION_WEIGHT.get(section, 1),
+        item.confidence,
+        abs(item.value or 0.0),
+    )
+
+
+def _select_diverse_occurrences(items: list[MetricItem], cap: int) -> list[MetricItem]:
+    """截断到 cap 条，但优先保证**页面多样性**。
+
+    直接按全局排序取前 N 会把附注里的取值整体挤掉 —— `_SECTION_WEIGHT` 让主表
+    永远排在附注前面，而附注恰恰是大量真实差异所在（实测会丢掉答案清单里
+    「P216 附注6 发放贷款和垫款账面价值」这一条）。
+    因此先按页分组、每页取最可信的一条，轮转铺满 cap，再回填同页的次优项。
+    """
+    by_page: dict[int, list[MetricItem]] = {}
+    for item in items:
+        by_page.setdefault(item.page, []).append(item)
+    for page_items in by_page.values():
+        page_items.sort(key=_occurrence_rank, reverse=True)
+
+    # 页面按该页最佳项的可信度排序，保证先铺可信页
+    pages = sorted(by_page, key=lambda p: _occurrence_rank(by_page[p][0]), reverse=True)
+
+    selected: list[MetricItem] = []
+    round_idx = 0
+    while len(selected) < cap:
+        added = False
+        for page in pages:
+            if round_idx < len(by_page[page]):
+                selected.append(by_page[page][round_idx])
+                added = True
+                if len(selected) >= cap:
+                    break
+        if not added:
+            break
+        round_idx += 1
+    return selected
+
+
+def _record_unmapped_label(
+    unmapped: Optional[list[dict]],
+    label: str,
+    value: float,
+    seg: Optional[TextSegment],
+    *,
+    page: Optional[int] = None,
+) -> None:
+    """登记未命中术语表的标签。
+
+    这些标签**不参与比对**（否则就是把公告标题、人名当成会计科目），
+    但按出现频次汇总后是 glossary 反向补表最直接的输入 ——
+    实测银行监管指标（资本充足率/拨备覆盖率/拆出资金）与 IFRS17 保险科目
+    全部落在这里。
+    """
+    if unmapped is None:
+        return
+    label = (label or "").strip()
+    if not label or len(label) > 40:
+        return
+    unmapped.append({"label": label, "value": value, "page": seg.page if seg else page})
 
 
 # ============================================================
@@ -188,7 +398,9 @@ def _table_snippet(label: str, val_text: str | None, header_text: str) -> str:
     return f"[{label}] {val_text}"
 
 
-def _extract_from_table_legacy(table: FinancialTable, side: ReportSide) -> list[MetricItem]:
+def _extract_from_table_legacy(
+    table: FinancialTable, side: ReportSide, unmapped: Optional[list[dict]] = None
+) -> list[MetricItem]:
     """从单个表格中提取所有带标签的数值。"""
     items: list[MetricItem] = []
     if not table.cells:
@@ -253,6 +465,13 @@ def _extract_from_table_legacy(table: FinancialTable, side: ReportSide) -> list[
             canonical_key = glossary.lookup(cleaned_label) or glossary.lookup(to_simplified(cleaned_label))
 
         if not canonical_key:
+            if settings.extraction_strict_binding:
+                # 未命中术语表的行标签不再造 canonical_key（否则「合计」「小计」「其他」
+                # 乃至股东名称都会变成会计科目并参与 A/H 比对）。
+                _record_unmapped_label(unmapped, label_simplified, 0.0, None, page=table.page)
+                prev_key = None
+                prev_label = ""
+                continue
             # 未匹配到glossary，用通用模式
             canonical_key = _to_snake_case(label_simplified)
             if not canonical_key or canonical_key == "unknown_metric":
@@ -310,7 +529,9 @@ def _extract_from_table_legacy(table: FinancialTable, side: ReportSide) -> list[
     return items
 
 
-def _extract_from_table(table: FinancialTable, side: ReportSide) -> list[MetricItem]:
+def _extract_from_table(
+    table: FinancialTable, side: ReportSide, unmapped: Optional[list[dict]] = None
+) -> list[MetricItem]:
     """Extract table metrics with column-level period context preserved."""
     items: list[MetricItem] = []
     if not table.cells:
@@ -356,6 +577,8 @@ def _extract_from_table(table: FinancialTable, side: ReportSide) -> list[MetricI
                 ),
                 confidence=confidence,
                 source=source,  # type: ignore[arg-type]
+                binding_strength=BINDING_TABLE if source == "table" else BINDING_GLOSSARY_WINDOW,
+                match_mode="exact",
             )
         )
 
@@ -393,6 +616,11 @@ def _extract_from_table(table: FinancialTable, side: ReportSide) -> list[MetricI
             direct_glossary_match = bool(canonical_key)
 
         if not canonical_key:
+            if settings.extraction_strict_binding:
+                _record_unmapped_label(unmapped, label_simplified, 0.0, None, page=table.page)
+                prev_key = None
+                prev_label = ""
+                continue
             canonical_key = _to_snake_case(label_simplified)
             if not canonical_key or canonical_key == "unknown_metric":
                 prev_key = None
@@ -714,12 +942,24 @@ def _raw_note_topic_key(cells: list[str]) -> str | None:
 
 
 def _raw_table_value_tokens(cells: list[str], start_idx: int, note_topic_key: str | None) -> list[tuple[float, str]]:
+    """收集某个行标签之后、属于该行的数值。
+
+    原实现向后扫 17 个 cell、把途中每个数字都算作该标签的取值，且只在遇到
+    **能映射到已知 key** 的 cell 时才停 —— 未命中术语表的行标签返回 None，
+    于是扫描一路吃掉后面若干行的数字。实测让「发放贷款和垫款」一个标签
+    收下 274 个不同取值。
+
+    现在改为：遇到**任何看起来像标签的 cell** 就停（行边界），且一行的取值
+    数量按真实报表列数封顶（本期/上期/母公司本期/母公司上期）。
+    """
     values: list[tuple[float, str]] = []
+    max_values = max(int(getattr(settings, "extraction_max_values_per_row", 4) or 4), 1)
     for cell in cells[start_idx + 1 : min(len(cells), start_idx + 18)]:
         cleaned = cell.strip()
         if not cleaned:
             continue
-        if values and _raw_label_key(cleaned, note_topic_key):
+        # 行边界：下一个标签开始，本行结束
+        if values and (_raw_label_key(cleaned, note_topic_key) or _looks_like_label(cleaned)):
             break
         if re.fullmatch(r"[\(\uff08]?[一二三四五六七八九十0-9]+[\)\uff09]?", cleaned):
             continue
@@ -732,7 +972,11 @@ def _raw_table_value_tokens(cells: list[str], start_idx: int, note_topic_key: st
                 continue
             if 1990 <= value <= 2035 and "." not in raw:
                 continue
+            if _is_date_or_note_number(value, raw):
+                continue
             values.append((value, raw))
+            if len(values) >= max_values:
+                return values
     return values
 
 
@@ -780,6 +1024,8 @@ def _extract_from_raw_table_text(
                     ),
                     confidence=0.82,
                     source="text",
+                    binding_strength=BINDING_RAW_TABLE,
+                    match_mode="exact",
                 )
             )
     return items
@@ -882,11 +1128,26 @@ def _number_text_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left_digits, right_digits).ratio()
 
 
-def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[str], doc_currency: Optional[Currency]) -> list[MetricItem]:
-    """从单个文本段中提取"标签+数字"模式。"""
+def _extract_from_text(
+    seg: TextSegment,
+    side: ReportSide,
+    doc_unit: Optional[str],
+    doc_currency: Optional[Currency],
+    unmapped: Optional[list[dict]] = None,
+) -> list[MetricItem]:
+    """从单个文本段中提取"标签+数字"模式。
+
+    `unmapped` 收集未命中术语表的标签（不参与比对，供 glossary 反向补表用）。
+    调用方各自传入自己的 list —— A/H 两侧在不同线程里并行构建画像，不能用模块级全局。
+    """
     items: list[MetricItem] = []
     text = (seg.text or seg.raw_text or "").strip()
     if len(text) < 5:
+        return items
+
+    # 区域限定：公告目录 / 董监高简历 / 章节索引里没有需要 A/H 比对的报表数字，
+    # 却贡献了大量伪 canonical_key（实测 P154 的 2025 绑到 35 个公告标题上）。
+    if settings.extraction_skip_non_financial_segments and _segment_is_non_financial(seg):
         return items
 
     # 策略1: 通用正则匹配 "标签: 数字" 或 "标签 数字"（中英文）
@@ -901,11 +1162,19 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
         # 跳过小数字（可能是编号）
         if abs(val) < 100 and "," not in num_text:
             continue
+        if _is_date_or_note_number(val, num_text):
+            continue
 
         label_simplified = to_simplified(label)
         canonical_key = glossary.lookup(label) or glossary.lookup(label_simplified)
         conf = 0.75
         if not canonical_key:
+            # 不再用 _to_snake_case 把任意自由文本造成 canonical_key ——
+            # 那是「公告标题/人名/职务/表格标题」变成财务科目的直接原因，
+            # 也是 663 个 key 里绝大多数的来源。未命中术语表的标签只登记不比对。
+            if settings.extraction_strict_binding:
+                _record_unmapped_label(unmapped, label_simplified, val, seg)
+                continue
             canonical_key = _to_snake_case(label_simplified)
             conf = 0.5
 
@@ -938,6 +1207,8 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
                 ),
                 confidence=conf,
                 source="text" if conf >= 0.75 else "generic_pattern",
+                binding_strength=BINDING_LABELED_INLINE,
+                match_mode="exact",
             )
         )
 
@@ -953,10 +1224,15 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
         # 跳过小数字
         if abs(val) < 100 and "," not in num_text:
             continue
+        if _is_date_or_note_number(val, num_text):
+            continue
 
         canonical_key = glossary.lookup(label) or glossary.lookup(label.lower())
         conf = 0.75
         if not canonical_key:
+            if settings.extraction_strict_binding:
+                _record_unmapped_label(unmapped, label, val, seg)
+                continue
             canonical_key = _to_snake_case(label)
             conf = 0.5
 
@@ -993,6 +1269,8 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
                 ),
                 confidence=conf,
                 source="text" if conf >= 0.75 else "generic_pattern",
+                binding_strength=BINDING_LABELED_INLINE,
+                match_mode="exact",
             )
         )
 
@@ -1034,9 +1312,24 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
             idx = text_for_matching.lower().find(matched_label.lower())
         if idx < 0:
             continue
-        window = text_for_matching[max(0, idx - 20):idx + len(matched_label) + 60]
-        val, val_text = _find_first_number(window, min_abs=0)  # 不限制最小值
+
+        # 更具体的标签优先：`净利润` 会命中在 `归属于上市公司股东的净利润` 内部，
+        # 若不加判别就会把归母净利润的数值挂到 net_profit 上。
+        # 向左把连续的中文标签字符补全，若补全后的标签映射到别的 key，说明命中的
+        # 是更长标签的一部分 —— 交给那个更具体的词条去处理。
+        if _matched_inside_more_specific_label(text_for_matching, idx, matched_label, key):
+            continue
+        # 取数窗口**只向后**：原实现从 idx-20 开始，会先扫到标签左边、
+        # 属于上一个科目的数字（实测「营业收入 100,000 元，营业成本 80,000 元」里
+        # cost_of_revenue 会取到 100,000）。同时窗口在遇到句读时截断，
+        # 避免跨越到下一个科目。
+        window_start = idx + len(matched_label)
+        window = text_for_matching[window_start:window_start + 60]
+        window = re.split(r"[。；;]", window)[0]
+        val, val_text = _find_first_number(window, min_abs=0)
         if val is None:
+            continue
+        if _is_date_or_note_number(val, val_text or ""):
             continue
 
         name = LocalizedString(zh=entry.zh_cn, en=entry.en)
@@ -1058,12 +1351,18 @@ def _extract_from_text(seg: TextSegment, side: ReportSide, doc_unit: Optional[st
                 ),
                 confidence=0.75,
                 source="text",
+                binding_strength=BINDING_GLOSSARY_WINDOW,
+                match_mode="alias" if matched_label != entry.zh_cn else "exact",
             )
         )
 
     overlay_numbers = _visual_overlay_tail_numbers(seg)
     if overlay_numbers:
         items.extend(_extract_from_raw_table_text(seg, side, doc_unit, doc_currency))
+    # 先消解绑定冲突再判定叠加层归属：叠加候选是按「与页面上已有同 key 取值的接近程度」
+    # 打分的，若候选池里还留着弱绑定的错误 key，叠加值会被挂到错误科目上。
+    if settings.extraction_strict_binding:
+        items = _resolve_binding_conflicts(items)
     _append_visual_overlay_items(items, seg, side, overlay_numbers, doc_unit, doc_currency)
     return items
 
@@ -1598,6 +1897,29 @@ def _internal_unit_multiplier(unit: str | None) -> float:
 # 主入口
 # ============================================================
 
+def _summarize_unmapped_labels(doc: ReportDocument, unmapped: list[dict]) -> None:
+    """把未命中术语表的标签按频次汇总进 doc.metadata，供 glossary 反向补表。
+
+    这些标签不参与比对，但「在报告里反复出现、却没有对应 canonical_key」正是
+    覆盖率缺口最直接的观测量 —— 实测银行资本充足率、拨备覆盖率、拆出资金，
+    以及 IFRS17 的保险服务收入全部落在这里。
+    """
+    if not unmapped:
+        return
+    counts: dict[str, int] = {}
+    for entry in unmapped:
+        label = entry["label"]
+        counts[label] = counts.get(label, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:200]
+    doc.metadata["unmapped_labels"] = [{"label": k, "count": v} for k, v in top]
+    doc.metadata["unmapped_label_total"] = len(unmapped)
+    side_label = "A股" if doc.side == ReportSide.A_SHARE else "H股"
+    logger.info(
+        f"[{side_label}] 未命中术语表的标签: {len(counts)} 种 / {len(unmapped)} 次"
+        f"（不参与比对，供 glossary 补表）"
+    )
+
+
 def extract_metrics(doc: ReportDocument) -> list[MetricItem]:
     """从 ReportDocument 中提取全量数值指标。
 
@@ -1619,20 +1941,33 @@ def extract_metrics(doc: ReportDocument) -> list[MetricItem]:
     logger.info(f"[{side_label}] 开始提取指标: {len(doc.tables)} 表, {len(doc.texts)} 文本段, 单位={doc_unit}")
 
     # 1. 表格提取
+    unmapped_labels: list[dict] = []
     table_items_count = 0
     for table in doc.tables:
-        items = _extract_from_table(table, doc.side)
+        items = _extract_from_table(table, doc.side, unmapped_labels)
         all_items.extend(items)
         table_items_count += len(items)
 
     # 2. 文本提取
     text_items_count = 0
     for seg in doc.texts:
-        items = _extract_from_text(seg, doc.side, doc_unit, doc_currency)
+        items = _extract_from_text(seg, doc.side, doc_unit, doc_currency, unmapped_labels)
         all_items.extend(items)
         text_items_count += len(items)
+    _summarize_unmapped_labels(doc, unmapped_labels)
 
     logger.info(f"[{side_label}] 原始提取: 表格={table_items_count}, 文本={text_items_count}, 总计={len(all_items)}")
+
+    # 2b. 跨路径绑定冲突消解：表格路径与文本路径可能对同一 (页码,数值) 各自认领
+    # 一个科目（实测 H 侧 P302 的 55,105 同时被 credit_impairment_loss 与 revenue 认领）。
+    # 按绑定强度择一：结构化表格 > 文本层表格行 > 同行标签 > 术语窗口。
+    if settings.extraction_strict_binding:
+        before_resolve = len(all_items)
+        all_items = _resolve_binding_conflicts(all_items)
+        if before_resolve != len(all_items):
+            logger.info(
+                f"[{side_label}] 跨路径绑定冲突消解: {before_resolve} -> {len(all_items)}"
+            )
 
     # 3. 同页去重：同一 canonical_key + page + value 保留 confidence 最高的。
     # 同页同指标但数值不同需要保留，用于识别可见 overlay 与文本层不一致。
@@ -1656,11 +1991,28 @@ def extract_metrics(doc: ReportDocument) -> list[MetricItem]:
     for item in result:
         grouped.setdefault(item.canonical_key, []).append(item)
 
+    # 4b. 每个 key 只保留最可信的 N 条 occurrence。
+    # 一个报表行项目最多有本期/上期/母公司两列这么几个合法取值；实测未截断时
+    # customer_loans 单个 key 有 356 条出现、286 个不同值，而 numeric.py 对同一
+    # key 做 A×H 笛卡尔积 —— 356×248 = 88,288 次配对打分，正确配对根本挑不出来。
+    occurrence_cap = max(int(getattr(settings, "extraction_max_occurrences_per_key", 24) or 24), 1)
+    dropped_total = 0
+    for key, items in grouped.items():
+        if len(items) <= occurrence_cap:
+            continue
+        dropped_total += len(items) - occurrence_cap
+        grouped[key] = _select_diverse_occurrences(items, occurrence_cap)
+    if dropped_total:
+        doc.metadata["occurrences_truncated"] = dropped_total
+        logger.info(f"[{side_label}] 每 key 截断至 {occurrence_cap} 条，丢弃 {dropped_total} 条低可信出现")
+
     # 5. 构建 MetricOccurrences（选 primary + 内部一致性检查）
     final: list[MetricOccurrences] = []
     for key, items in grouped.items():
-        # primary = 绝对值最大 + confidence 最高的
-        primary = max(items, key=lambda m: (abs(m.value or 0), m.confidence))
+        # primary 按可信度选，数值大小只作最后的 tie-break。
+        # 原实现用「绝对值最大」，会让一条低置信的垃圾大数击败主表正确值，
+        # 也会让以「元」计价的出现击败以「百万元」计价的同一指标。
+        primary = max(items, key=_occurrence_rank)
         occ = MetricOccurrences(
             canonical_key=key,
             name=primary.name,

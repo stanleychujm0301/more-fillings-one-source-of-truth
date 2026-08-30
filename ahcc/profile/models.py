@@ -34,6 +34,11 @@ class MetricItem(BaseModel):
     evidence: Evidence
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     source: Literal["table", "text", "generic_pattern"] = "text"
+    # 绑定强度：这个数字与这个科目标签的结合有多可信（结构化表格 > 同行标签 > 术语窗口）。
+    # 同一 (页码,数值) 位置被多个科目认领时用它择一，见 extract_metrics._resolve_binding_conflicts。
+    binding_strength: int = 30
+    # glossary 命中方式：exact/alias 可参与真实差异判定，fuzzy（子串兜底）只能做参考。
+    match_mode: Literal["exact", "alias", "fuzzy", "none"] = "exact"
 
 
 class InternalInconsistency(BaseModel):

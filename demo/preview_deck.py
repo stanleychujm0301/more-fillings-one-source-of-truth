@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECK = "file:///" + os.path.join(ROOT, "demo", "finals-deck.html").replace("\\", "/")
 OUT = os.path.join(ROOT, "demo", "preview")
-TOTAL = 15
+TOTAL = 16
 
 os.makedirs(OUT, exist_ok=True)
 
@@ -29,11 +29,11 @@ with sync_playwright() as p:
         page.screenshot(path=os.path.join(OUT, "s%02d.png" % i))
         print("saved s%02d.png" % i)
 
-    # keyboard nav sanity: start at 1, End -> 13, Home -> 1, ArrowRight -> 2
+    # keyboard nav sanity: start at 1, End -> 16, Home -> 1, ArrowRight -> 2
     page.goto(DECK)
     page.wait_for_timeout(600)
     page.keyboard.press("End"); page.wait_for_timeout(500)
-    assert page.locator("#pageno").inner_text().startswith("15"), "End key failed"
+    assert page.locator("#pageno").inner_text().startswith("16"), "End key failed"
     page.keyboard.press("Home"); page.wait_for_timeout(500)
     assert page.locator("#pageno").inner_text().startswith("1"), "Home key failed"
     page.keyboard.press("ArrowRight"); page.wait_for_timeout(500)

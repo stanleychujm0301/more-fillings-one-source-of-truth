@@ -68,18 +68,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_competition.ps
 旧的进程内执行（pytest/eval 默认）。任务级日志见 `storage/jobs/<job_id>/worker.log`，
 服务日志见 `logs/server.log`。
 
-### 样本评估（对应题目"漏检率 ≤5%"）
+### 准确率评估
+
+> **重要口径说明。** 早前 `storage/eval/eval_baseline.md` 里的「100% 召回 / 0 误报」是用
+> `--overlay-only` 跑出来的，只覆盖 `text_overlay_tamper` 一条路径，**不代表跨报告
+> A/H 一致性核查的能力**。该检查器针对的是「错误值叠加在原值上、原值仍留在文本层」
+> 这一种特定制作方式（正是主办方样本的制作方式）；换一种造错方式它完全失效。
+> 现在评估分四条互不干扰的通道，且基线文件强制记录运行模式与 git commit。
 
 ```bash
-# 快速回归（仅叠加篡改检测，秒级）：
-python scripts/eval_samples.py --samples-dir "F:/毕马威黑客松/样本测试/sample" --overlay-only
+# 1) 植入错误样本的召回（需要答案清单）
+python scripts/eval_samples.py recall --samples-dir "F:/毕马威黑客松/样本测试/sample"
 
-# 全 pipeline 评估（写入 storage/eval/eval_baseline.md）：
-python scripts/eval_samples.py --samples-dir "F:/毕马威黑客松/样本测试/sample"
+# 2) 真实 A/H 样本的误报上界 + 人工抽检工作簿（无需标准答案）
+python scripts/eval_samples.py fp --samples-dir "F:/毕马威黑客松/样本测试"
 
-# 真实样本慢速回归（45 处植入错误 + 光大 40 分支差异）：
+# 3) 自一致性探针：同一份 PDF 自配对，跨报告差异必须为 0
+python scripts/eval_samples.py self-check --pdf "F:/.../A 中国平安2025年年度报告.pdf"
+
+# 4) 注入式召回：三种造错方式分别统计（这才是真实召回）
+python scripts/eval_samples.py inject --pdf "F:/.../光大银行_2025年H股年报.pdf" --count 90
+
+# 真实样本慢速回归：
 AHCC_SAMPLES_DIR="F:/毕马威黑客松/样本测试" python -m pytest -m slow -q
 ```
+
+**当前真实基线**（全 pipeline，光大银行 H 股年报注入 90 处已知错误，
+见 `storage/eval/inject_recall.md`）：
+
+| 注入方式 | 原值是否残留在文本层 | 注入 | 命中 | 检出但被压制 | 召回率 |
+|---|---|---|---|---|---|
+| `overlay`（主办方做法） | 是 | 30 | 30 | 0 | 100.0% |
+| `edit`（直接改文本层） | 否 | 30 | 3 | 3 | 10.0% |
+| `swap`（表格换位） | 否 | 30 | 1 | 4 | 3.3% |
+| **合计** | - | 90 | 34 | 7 | **37.8%** |
+
+同一次运行产生 13 条 hard 误报，**全部**来自 `visual_text_layer_mismatch` 一条规则。
+「检出但被压制」的 7 条中有 6 条是 `context_mismatch`（triage=unresolved、severity=info）
+—— 系统查到了差异却因口径判定把它埋掉，用户在界面上看不到。
 
 ---
 

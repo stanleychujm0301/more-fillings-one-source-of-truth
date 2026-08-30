@@ -10,6 +10,7 @@ import re
 from loguru import logger
 
 from ahcc.align.glossary import to_simplified
+from ahcc.check.table_row_align import check_row_alignment, log_report
 from ahcc.schemas import (
     Diff,
     DiffSeverity,
@@ -172,6 +173,18 @@ def compare_branch_tables(
             len(matched_names),
             alignment_ratio,
         )
+        return []
+
+    # 行错位自检：比对前先确认「名称↔数值」没有整体错开一行。
+    # 实测光大银行 A/H 有 40/44 家的 H 侧数值等于 A 侧**另一家**分行的数值 ——
+    # 那是解析错位，不是 40 处真实不一致。错位时整表不出结论。
+    alignment = check_row_alignment(
+        {name: data["asset"] for name, data in a_branches.items()},
+        {name: data["asset"] for name, data in h_branches.items()},
+    )
+    log_report(alignment, "分支机构资产规模")
+    if not alignment.comparable:
+        logger.warning("分支机构披露检查：{}，本表不产出差异", alignment.reason())
         return []
 
     diffs: list[Diff] = []
