@@ -20,6 +20,7 @@ from ahcc.llm.client import consume_llm_failures, set_current_job_id
 from ahcc.schemas import (
     DisclosureCoverageItem,
     DiffScope,
+    DiffSeverity,
     Evidence,
     Job,
     JobProgress,
@@ -39,6 +40,7 @@ class Orchestrator:
         self._progress_callback: Callable[[Job], None] | None = None
         self._visual_ocr_status: dict[str, Any] | None = None
         self._branch_diagnostics: dict[str, Any] | None = None
+        self._unresolved_suppressed_count: int = 0
 
     async def run(
         self,
@@ -106,7 +108,7 @@ class Orchestrator:
             async def _empty_diffs() -> list:
                 return []
 
-            numeric_diffs, standard_diffs, disclosure_diffs, tamper_diffs, overlay_diffs, branch_diffs = await asyncio.gather(
+            numeric_diffs, standard_diffs, disclosure_diffs, tamper_diffs, overlay_diffs, branch_diffs, twin_diffs, pos_twin_diffs = await asyncio.gather(
                 self._safe_check(self._check_numeric_profiles(profile_a, profile_h), job, "数值检查", [], module_warnings, 60),
                 self._safe_check(self._check_standard_profiles(profile_a, profile_h), job, "准则检查（RAG）", [], module_warnings, 65)
                 if settings.enable_standard_check
@@ -128,6 +130,8 @@ class Orchestrator:
                 if settings.enable_text_overlay_check
                 else _empty_diffs(),
                 self._safe_check(self._check_branch(a_file, h_file), job, "分支机构核查", [], module_warnings, 73),
+                self._safe_check(self._check_table_row_twin(doc_a, doc_h), job, "表格行孪生比对", [], module_warnings, 74),
+                self._safe_check(self._check_positional_value_twin(doc_a, doc_h), job, "位置孪生比对", [], module_warnings, 74),
             )
             visual_warning = self._visual_ocr_warning(visual_ocr_status)
             if visual_warning:
@@ -146,9 +150,12 @@ class Orchestrator:
             job.coverage_items = coverage_items
 
             chart_diffs = []
-            if not settings.demo_mode and settings.enable_chart_vlm_check:
+            if not settings.demo_mode and settings.enable_chart_check:
                 self._emit(job, JobStatus.CHECKING, 90, "图表三方交叉核对")
-                chart_diffs = await self._safe_check(self._check_chart(doc_a, doc_h), job, "图表核对（VLM）", [], module_warnings, 92)
+                chart_diffs = await self._safe_check(self._check_chart(doc_a, doc_h), job, "图表核对", [], module_warnings, 92)
+                chart_warning = self._chart_warning(doc_a, doc_h)
+                if chart_warning:
+                    module_warnings.append(chart_warning)
 
             job.diffs = [
                 *numeric_diffs,
@@ -159,9 +166,25 @@ class Orchestrator:
                 *chart_diffs,
                 *overlay_diffs,
                 *branch_diffs,
+                *twin_diffs,
+                *pos_twin_diffs,
             ]
             job.diffs = self._dedupe_overlay_shadows(job.diffs)
             job.diffs = self._dedupe_identical_diffs(job.diffs)
+            job.diffs = self._dedupe_twin_conflicts(job.diffs)
+            job.diffs = self._dedupe_cross_rule_real(job.diffs)
+            job.diffs = self._dedupe_identical_diffs(job.diffs)
+            job.diffs, self._unresolved_suppressed_count = self._apply_unresolved_budget(job.diffs)
+
+            # 同一文件自比对（A=H 同路径）：跨报告差异在定义上不可能存在 ——
+            # 残留条目全部源于 A/H 两条解析路径的口径/单位探测不对称（平安 self-check
+            # 的 2 条 unresolved + 15 条单位修正 expected 即来源于此）。整类剔除，
+            # 仅保留单侧内部一致性发现（它们与对侧无关，仍然有效）。
+            if self._is_same_file(a_file, h_file):
+                before = len(job.diffs)
+                job.diffs = [d for d in job.diffs if d.diff_scope != DiffScope.CROSS_REPORT]
+                if before != len(job.diffs):
+                    logger.info(f"同一文件自比对：剔除 {before - len(job.diffs)} 条跨报告条目（定义上不存在）")
 
             # ---------- 阶段 4：报告 ----------
             # 先结算汇总与耗时，再生成报告 —— 确保报告内「核查耗时/生成时间/提取预警」取到真实值
@@ -175,6 +198,12 @@ class Orchestrator:
                 module_warnings=module_warnings,
             )
             job.comparison_summary["visual_ocr_status"] = visual_ocr_status or {"mode": visual_review_mode}
+            job.comparison_summary["unresolved_suppressed_count"] = self._unresolved_suppressed_count
+            job.comparison_summary["chart_check"] = {
+                "enabled": bool(settings.enable_chart_check and not settings.demo_mode),
+                "mode": "vlm" if settings.enable_chart_vlm_check else getattr(settings, "chart_extract_mode", "text_layer"),
+                "charts_detected": len(doc_a.charts) + len(doc_h.charts),
+            }
             job.finished_at = datetime.utcnow()
             job.duration_seconds = (job.finished_at - job.started_at).total_seconds()
 
@@ -298,9 +327,81 @@ class Orchestrator:
         return await run_disclosure_checks(doc_a, doc_h)
 
     async def _check_chart(self, doc_a: ReportDocument, doc_h: ReportDocument):
-        """模块 C — P4 实现，调用 VLM。Demo 模式下最多核对 15 张图表。"""
+        """模块 C — 文本层抽取（默认）/VLM。Demo 模式下最多核对 15 张图表。"""
         from ahcc.check.chart import run_chart_checks
         return await run_chart_checks(doc_a, doc_h, max_charts=15)
+
+    @staticmethod
+    def _chart_warning(doc_a: ReportDocument, doc_h: ReportDocument) -> dict | None:
+        """「检测到图表但无可用数据」与「核对无异常」是两种结果，必须透出区分。"""
+        total = len(doc_a.charts) + len(doc_h.charts)
+        if not total:
+            return None
+        if settings.enable_chart_vlm_check:
+            mode = "vlm"
+        else:
+            mode = (getattr(settings, "chart_extract_mode", "text_layer") or "text_layer")
+        if mode == "off":
+            return None
+        return {
+            "code": "chart_text_layer_mode",
+            "message": (
+                f"图表核对已启用（{mode} 模式，共检测 {total} 张图表）。"
+                "纯位图扫描件的图表无文本层数据，相应图表不参与比对；"
+                "「检测到图表但无可用数据」与「核对无异常」是不同结果。"
+            ),
+        }
+
+    async def _check_table_row_twin(self, doc_a: ReportDocument, doc_h: ReportDocument):
+        """模块 D — 无标签表格行孪生比对（纯 CPU 无 LLM），edit/swap 注入的主力检出腿。"""
+        from ahcc.check.table_row_twin import run_table_row_twin_checks
+        diffs, stats = await asyncio.to_thread(run_table_row_twin_checks, doc_a, doc_h)
+        logger.info(f"表格行孪生比对: {stats}")
+        return diffs
+
+    async def _check_positional_value_twin(self, doc_a: ReportDocument, doc_h: ReportDocument):
+        """模块 E — 位置孪生比对（纯 fitz 无 LLM）。redaction 类篡改会把重写文本的
+        抽取序挪到页尾，行/序列配对均失效；坐标配对不受影响，是 edit/swap 的主力检出腿。
+        （取代文本行孪生：行孪生的错配值在评估通道产生 5 hard FP + 5 漏检，实测被
+        位置孪生完全覆盖后退役。）"""
+        from ahcc.check.positional_value_twin import run_positional_value_twin_checks
+        return await asyncio.to_thread(run_positional_value_twin_checks, doc_a, doc_h)
+
+    @staticmethod
+    def _is_same_file(a_file: str, h_file: str) -> bool:
+        """两侧输入是否同一物理文件（self-check 探针 / 用户重复上传）。"""
+        try:
+            import os
+
+            return os.path.samefile(a_file, h_file)
+        except OSError:
+            return False
+
+    @staticmethod
+    def _dedupe_twin_conflicts(diffs: list) -> list:
+        """跨规则去重：表格行孪生（table_row_value_conflict）与数值/内部一致性规则可能
+        对同一处取值冲突重复产出 Diff。以同 A 页 + 四舍五入到整数位的 (a_value, h_value)
+        为指纹，保留 evidence 更完整的那条，避免同一处篡改在报告里出现两遍。"""
+        twin_fps: dict[tuple, str] = {}
+        for d in diffs:
+            if d.rule_id != "table_row_value_conflict" or d.a_value is None or d.h_value is None:
+                continue
+            a_page = next((ev.page for ev in d.evidence if ev.side == ReportSide.A_SHARE), None)
+            fp = (a_page, round(d.a_value, -2), round(d.h_value, -2))
+            twin_fps[fp] = d.diff_id
+        if not twin_fps:
+            return diffs
+
+        def _is_twin_shadow(d) -> bool:
+            if d.rule_id == "table_row_value_conflict" or d.a_value is None or d.h_value is None:
+                return False
+            a_page = next((ev.page for ev in d.evidence if ev.side == ReportSide.A_SHARE), None)
+            return (a_page, round(d.a_value, -2), round(d.h_value, -2)) in twin_fps
+
+        kept = [d for d in diffs if not _is_twin_shadow(d)]
+        if len(kept) != len(diffs):
+            logger.info(f"表格行孪生跨规则去重：剔除 {len(diffs) - len(kept)} 条重复冲突")
+        return kept
 
     async def _detect_charts(self, doc: ReportDocument, job_id: str) -> ReportDocument:
         """图表区域检测 — P2 实现。"""
@@ -373,6 +474,97 @@ class Orchestrator:
         diffs, diagnostics = await asyncio.to_thread(run_branch_checks, a_file, h_file)
         self._branch_diagnostics = diagnostics
         return diffs
+
+    @staticmethod
+    def _dedupe_cross_rule_real(diffs: list) -> list:
+        """跨规则 real 去重：多条检测腿（overlay / 内部仲裁 / 行孪生 / 文本行孪生 /
+        occurrence 冲突）命中**同一处**篡改时会各自产出 real 差异 —— 评估口径下未匹配
+        目标的那几条全部计入 hard FP（青岛啤酒 15 处注入产生 89 条 hard FP 的主因）。
+
+        判重指纹：同侧 + 页码 ±1 + 声称值匹配（相对容差 1e-4，兼容 10 的幂缩放 ——
+        不同规则对"千元/元"的归一化程度不同）。命中重复时保留严重度更高、证据更完整、
+        规则更具体的一条。unresolved/expected 不参与（它们不受 hard FP 口径约束）。
+        """
+        import math
+
+        def _claimed_values(d) -> list[float]:
+            return [v for v in (d.a_value, d.h_value) if v is not None]
+
+        def _value_match(x: float, y: float) -> bool:
+            if not x or not y:
+                return False
+            if abs(x - y) / max(abs(x), abs(y), 1e-9) <= 1e-4:
+                return True
+            ratio = abs(x / y)
+            if ratio <= 0:
+                return False
+            exponent = math.log10(ratio)
+            nearest = round(exponent)
+            if nearest == 0 or abs(exponent - nearest) > 1e-6:
+                return False
+            scaled = x / (10.0 ** nearest)
+            return abs(scaled - y) / max(abs(scaled), abs(y), 1e-9) <= 1e-4
+
+        def _side_pages(d) -> set[tuple[str, int]]:
+            return {
+                (ev.side.value, ev.page)
+                for ev in (d.evidence or [])
+                if ev.side is not None and ev.page
+            }
+
+        severity_rank = {
+            DiffSeverity.CRITICAL: 0,
+            DiffSeverity.HIGH: 1,
+            DiffSeverity.MEDIUM: 2,
+            DiffSeverity.LOW: 3,
+            DiffSeverity.INFO: 4,
+        }
+        # 规则特异性：指纹越精确的规则越优先保留（overlay 有 bbox 视觉证据，最优）
+        rule_rank = {
+            "text_overlay_tamper": 0,
+            "visual_text_layer_mismatch": 1,
+            "positional_value_conflict": 2,
+            "table_row_value_conflict": 3,
+            "text_line_value_conflict": 4,
+            "internal_value_conflict": 5,
+            "numeric_occurrence_conflict": 6,
+            "numeric_leftover_conflict": 7,
+        }
+
+        def _priority(d) -> tuple:
+            return (
+                severity_rank.get(d.severity, 5),
+                rule_rank.get(d.rule_id or "", 9),
+                -len(d.evidence or []),
+            )
+
+        def _duplicates(a, b) -> bool:
+            if not _claimed_values(a) or not _claimed_values(b):
+                return False
+            pages_a, pages_b = _side_pages(a), _side_pages(b)
+            if not any(
+                side_a == side_b and abs(pa - pb) <= 1
+                for side_a, pa in pages_a
+                for side_b, pb in pages_b
+            ):
+                return False
+            return any(
+                _value_match(va, vb) for va in _claimed_values(a) for vb in _claimed_values(b)
+            )
+
+        real_sorted = sorted((d for d in diffs if d.triage == "real"), key=_priority)
+        kept: list = []
+        dropped = 0
+        for d in real_sorted:
+            if any(_duplicates(d, k) for k in kept):
+                dropped += 1
+                continue
+            kept.append(d)
+        if not dropped:
+            return diffs
+        logger.info(f"跨规则 real 去重：合并 {dropped} 条重复检出（同侧同页同值）")
+        kept_ids = {id(d) for d in kept}
+        return [d for d in diffs if d.triage != "real" or id(d) in kept_ids]
 
     @staticmethod
     def _dedupe_identical_diffs(diffs: list) -> list:
@@ -463,6 +655,48 @@ class Orchestrator:
             )
 
         return [d for d in diffs if not _is_shadow(d)]
+
+    @staticmethod
+    def _apply_unresolved_budget(diffs: list) -> tuple[list, int]:
+        """待复核(unresolved)条目的全局预算（激进噪声压制）。
+
+        干净对噪声治理要求每对报告 unresolved ≤ `settings.report_max_unresolved`（默认 10）。
+        超出部分按 严重度 → 是否核心指标 → 相对差异 排序截断 —— 保留最可能藏真问题的，
+        丢弃低信息量噪声（同报告多章节口径重申、低置信候选等）。截断数量返回给调用方，
+        记入 comparison_summary.unresolved_suppressed_count 透出，不静默。
+        """
+        budget = max(int(getattr(settings, "report_max_unresolved", 10)), 0)
+        unresolved = [d for d in diffs if d.triage == "unresolved"]
+        if len(unresolved) <= budget:
+            return diffs, 0
+
+        from ahcc.check.numeric import _CORE_KEYS
+
+        severity_rank = {
+            DiffSeverity.CRITICAL: 0,
+            DiffSeverity.HIGH: 1,
+            DiffSeverity.MEDIUM: 2,
+            DiffSeverity.LOW: 3,
+            DiffSeverity.INFO: 4,
+        }
+
+        def _rel_delta(d) -> float:
+            if d.a_value is None or d.h_value is None:
+                return 0.0
+            return abs(d.a_value - d.h_value) / max(abs(d.a_value), abs(d.h_value), 1e-9)
+
+        def _keep_rank(d) -> tuple:
+            return (
+                severity_rank.get(d.severity, 5),
+                0 if (d.canonical_key in _CORE_KEYS) else 1,
+                -_rel_delta(d),
+            )
+
+        keep = set(id(d) for d in sorted(unresolved, key=_keep_rank)[:budget])
+        suppressed = len(unresolved) - budget
+        if suppressed:
+            logger.info(f"待复核条目超出预算 {budget}：截断 {suppressed} 条低优先级 unresolved")
+        return [d for d in diffs if d.triage != "unresolved" or id(d) in keep], suppressed
 
     async def _check_disclosure_profiles(self, profile_a, profile_h):
         """披露差异检查（基于画像）。"""

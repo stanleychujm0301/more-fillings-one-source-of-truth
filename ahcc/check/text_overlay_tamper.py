@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from ahcc.check.explanation import make_value_explanation
 from ahcc.schemas import (
     Diff,
     DiffScope,
@@ -248,8 +249,28 @@ def _hit_to_diff(hit: OverlayHit, side: ReportSide, seq: int) -> Diff:
             f"{side_label}-share page {hit.page} {hit.row_label}: two different values "
             f"{hit.visible_value} / {hit.hidden_value} overlap at the same position"
         )
-    snippet_core = f"{hit.row_label} 可见:{hit.visible_value} 底层:{hit.hidden_value}".strip()
-    context = f" | {hit.line_text}" if hit.line_text else ""
+    # 证据契约：snippet 必须是页面真实文本（证据链抽验逐词回核原文页）。
+    # 「可见/底层」的判读放在 summary 与 diff_explanation，不进 snippet。
+    line_excerpt = (hit.line_text or hit.row_label or hit.visible_value)[:200]
+    evidence = [
+        Evidence(
+            side=side,
+            page=hit.page,
+            bbox=hit.visible_rect,
+            snippet=line_excerpt,
+            section="文本层叠加检测",
+        ),
+        Evidence(
+            side=side,
+            page=hit.page,
+            bbox=hit.hidden_rect,
+            # 底层原值文本对象仍在文本层（overlay 不删除原文），其原文即页面真实内容
+            snippet=str(hit.hidden_value)[:200],
+            section="文本层叠加检测",
+        ),
+    ]
+    visible_val = _parse_value(hit.visible_value)
+    hidden_val = _parse_value(hit.hidden_value)
     return Diff(
         diff_id=f"OVERLAY_{side_label}_{hit.page}_{seq}",
         diff_type=DiffType.INTERNAL,
@@ -260,26 +281,21 @@ def _hit_to_diff(hit: OverlayHit, side: ReportSide, seq: int) -> Diff:
             zh=f"{side_label}股文本层叠加篡改", en=f"{side_label}-share text-layer overlay"
         ),
         summary=LocalizedString(zh=summary_zh, en=summary_en),
-        a_value=_parse_value(hit.visible_value),
-        h_value=_parse_value(hit.hidden_value),
+        a_value=visible_val,
+        h_value=hidden_val,
         tolerance=0.0,
-        evidence=[
-            Evidence(
-                side=side,
-                page=hit.page,
-                bbox=hit.visible_rect,
-                snippet=(snippet_core + context)[:200],
-                section="文本层叠加检测",
-            ),
-            Evidence(
-                side=side,
-                page=hit.page,
-                bbox=hit.hidden_rect,
-                snippet=f"底层原值 {hit.hidden_value}（被 {hit.visible_value} 覆盖）"[:200],
-                section="文本层叠加检测",
-            ),
-        ],
+        evidence=evidence,
         rule_id="text_overlay_tamper",
+        diff_explanation=make_value_explanation(
+            headline=f"{side_label}股第{hit.page}页文本层叠加篡改",
+            label=f"{side_label}股第{hit.page}页叠加值",
+            role="text_overlay_tamper",
+            a_value=visible_val,
+            h_value=hidden_val,
+            delta=(abs(visible_val - hidden_val) if visible_val is not None and hidden_val is not None else None),
+            evidence=evidence,
+            review_hint="可见层数值覆盖了底层原值，属于植入式篡改特征，需对照原始披露文件核对。",
+        ),
     )
 
 

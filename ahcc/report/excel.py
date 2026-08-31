@@ -257,7 +257,7 @@ def export_excel(job: Job, out_path: Path) -> None:
     ws_ev = wb.create_sheet("证据定位")
     _write_evidence_sheet(ws_ev, job.diffs)
 
-    # 总览 sheet 放最前；但保持「差异清单」为 active（现有测试依赖 wb.active）
+    # 总览 sheet 放最前；默认激活「真实差异」sheet —— 打开报告第一眼就是需要复核的项
     import shutil
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,7 +266,7 @@ def export_excel(job: Job, out_path: Path) -> None:
         ws_overview = wb.create_sheet("核查总览", 0)
         _write_overview_sheet(ws_overview, job, chart_dir)
         _finalize_workbook(wb)
-        wb.active = wb.index(ws)
+        wb.active = wb.index(ws_real)
 
         wb.save(out_path)
     finally:
@@ -301,7 +301,12 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
 
     _append_row(ws, headers)
 
-    sorted_diffs = sorted(diffs, key=lambda d: S.severity_rank(d.severity), reverse=True)
+    # triage 优先（real > unresolved > expected），同级再按严重度排序
+    triage_rank = {"real": 0, "unresolved": 1, "expected": 2}
+    sorted_diffs = sorted(
+        diffs,
+        key=lambda d: (triage_rank.get(str(d.triage), 3), -S.severity_rank(d.severity)),
+    )
     for diff in sorted_diffs:
         pages = "; ".join(f"{e.side.value} P.{e.page}" for e in diff.evidence)
         ai_note = diff.standard_reasoning.rationale if diff.standard_reasoning else ""

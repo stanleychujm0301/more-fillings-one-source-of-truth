@@ -42,9 +42,16 @@ class Settings(BaseSettings):
     upload_max_bytes: int = 80 * 1024 * 1024
 
     # 性能
-    llm_concurrency: int = 4
+    # LLM 并发上限压到 3：DeepSeek API 侧超过 3 并发会大面积 429（实测），
+    # 多任务场景峰值 = job_max_concurrency × llm_concurrency，演示日若仍 429 将 job_max_concurrency 降至 2。
+    llm_concurrency: int = 3
     llm_timeout: int = 60
     llm_max_retries: int = 3
+
+    # 报告呈现：待复核(unresolved)条目的全局预算。干净对噪声治理（激进压制）要求
+    # 每对报告的 unresolved ≤10；超出部分按 严重度→核心指标→相对差异 排序截断，
+    # 截断数量记入 job.comparison_summary.unresolved_suppressed_count 透出。
+    report_max_unresolved: int = 10
 
     # H 股中英文跨币种核对汇率（以 HKD 为基准换算后比较）
     # H 股中文版常以人民币披露、英文版常以港币披露，需换算后才能比对金额
@@ -101,7 +108,13 @@ class Settings(BaseSettings):
     visual_ocr_easyocr_skip_pages: int = 180
     visual_ocr_easyocr_skip_mb: float = 20.0
     chart_detection_max_pages: int = 60
-    enable_chart_vlm_check: bool = False
+    # 图表核对（默认开启，文本层路线）。deepseek-v4-pro 不支持图像输入（实测 HTTP 400），
+    # 因此图表数据走 PyMuPDF 在图表 bbox 内直接读文本层（年报图表是矢量图），比 VLM
+    # 更确定、可审计。chart_extract_mode: text_layer（默认）| vlm | off。
+    # enable_chart_vlm_check 保留为废弃别名：True → vlm，False → 沿用 chart_extract_mode。
+    enable_chart_check: bool = True
+    chart_extract_mode: str = "text_layer"  # text_layer | vlm | off
+    enable_chart_vlm_check: bool = False  # deprecated alias，见上
     # 文本层叠加篡改检测（纯 fitz，无 OCR）：检出"错误值覆盖在原值上方"的植入式篡改
     enable_text_overlay_check: bool = True
     # 任务执行：subprocess=每个任务独立 worker 子进程（可强杀，崩溃不连累服务）；inline=事件循环内执行（测试/评估用）

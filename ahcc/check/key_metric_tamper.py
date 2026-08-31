@@ -14,6 +14,7 @@ from typing import Literal
 from loguru import logger
 
 from ahcc.config import settings
+from ahcc.check.explanation import make_value_explanation
 from ahcc.llm.client import cached_call
 from ahcc.profile.models import MetricItem, MetricOccurrences, ReportProfile
 from ahcc.schemas import Diff, DiffScope, DiffSeverity, DiffType, Evidence, LocalizedString, ReportSide
@@ -82,7 +83,7 @@ FRONT_MATTER_PAGE_LIMIT = 60
 SMART_VISUAL_MAX_PAGES = 24
 STRICT_VISUAL_PAGE_LIMIT = 120
 MAX_EXACT_RELATIVE_DELTA = 0.01
-MAX_EXACT_DIFFS_PER_KEY = 8
+MAX_EXACT_DIFFS_PER_KEY = 3
 MAX_SMALL_SCALE_ABSOLUTE_DELTA = 5.0
 MIN_VISUAL_ROW_LABEL_SIMILARITY = 0.45
 MIN_VISUAL_DIGIT_TAMPER_SIMILARITY = 0.82
@@ -707,6 +708,17 @@ def _is_ocr_item(item: MetricItem) -> bool:
     return item.source == "generic_pattern" and ("ocr" in snippet or "visual" in snippet)
 
 
+def _is_embedded_visual_item(item: MetricItem) -> bool:
+    """embedded 视觉项：PDF 内嵌文本层衍生的「视觉值」（snippet 带 [visual overlay 前缀）。
+
+    与运行时 OCR 的区别：embedded 值本就来自同一文本层的另一种排布，
+    与文本层取值不一致不构成独立证据（历史上全部 13 条 hard FP 的来源）；
+    运行时 OCR 是独立采样，仍保留 real/high。
+    """
+    snippet = (item.evidence.snippet if item.evidence else "") or ""
+    return "visual overlay" in snippet.lower()
+
+
 def _visual_layer_mismatches(
     profile: ReportProfile,
     text_items: list[MetricItem],
@@ -734,13 +746,16 @@ def _visual_layer_mismatches(
         side_label = "A" if profile.side == ReportSide.A_SHARE else "H"
         evidence = [visible.evidence, text_item.evidence]
         canonical_key = _visual_diff_canonical_key(visible, text_item)
+        # embedded 视觉项（同一文本层的另一种排布）降级为 info/unresolved —— 不构成
+        # 独立证据；只有运行时 OCR 独立采样的不一致才保留 real/high。
+        embedded = _is_embedded_visual_item(visible)
         diffs.append(
             Diff(
                 diff_id=f"VISUAL_{side_label}_{canonical_key}_{visible.page}_{uuid.uuid4().hex[:4]}",
                 diff_type=DiffType.INTERNAL,
                 diff_scope=DiffScope.A_INTERNAL if profile.side == ReportSide.A_SHARE else DiffScope.H_INTERNAL,
-                severity=DiffSeverity.HIGH,
-                triage="real",
+                severity=DiffSeverity.INFO if embedded else DiffSeverity.HIGH,
+                triage="unresolved" if embedded else "real",
                 canonical_key=canonical_key,
                 topic=LocalizedString(zh=f"{side_label}股报告视觉层数值", en=f"{side_label} visual value"),
                 summary=LocalizedString(
@@ -759,6 +774,16 @@ def _visual_layer_mismatches(
                 tolerance=0.0,
                 evidence=evidence,
                 rule_id="visual_text_layer_mismatch",
+                diff_explanation=make_value_explanation(
+                    headline=f"{side_label}股第{visible.page}页{label}视觉层与文本层不一致",
+                    label=label,
+                    role=canonical_key or "visual_text_layer_mismatch",
+                    a_value=visible_value,
+                    h_value=text_value,
+                    delta=delta,
+                    evidence=evidence,
+                    review_hint="视觉层（OCR）与 PDF 文本层取值不一致，疑似可见披露与可抽取文本不符，需人工核对原页。",
+                ),
             )
         )
     return diffs
@@ -1007,57 +1032,6 @@ def _is_total_row_label(label: str) -> bool:
 
 
 def _exact_cross_report_mismatches(
-    a_by_key: dict[str, MetricItem],
-    h_by_key: dict[str, MetricItem],
-) -> list[Diff]:
-    diffs: list[Diff] = []
-    for key in sorted(set(a_by_key) & set(h_by_key)):
-        a_item = a_by_key[key]
-        h_item = h_by_key[key]
-        a_value = _normalized_value(a_item)
-        h_value = _normalized_value(h_item)
-        if a_value is None or h_value is None:
-            continue
-        if not _same_reporting_scope(a_item, h_item):
-            continue
-        if _same_value(a_value, h_value):
-            continue
-        delta = abs(a_value - h_value)
-        ratio = delta / max(abs(a_value), abs(h_value), 1.0)
-        if ratio > MAX_EXACT_RELATIVE_DELTA:
-            continue
-        llm_reason = _llm_exact_downgrade_reason(key, a_item, h_item, a_value, h_value)
-        if llm_reason:
-            diffs.append(_make_llm_review_diff(key, a_item, h_item, a_value, h_value, llm_reason))
-            continue
-        label = _label_for(a_item, h_item)
-        evidence = [a_item.evidence, h_item.evidence]
-        severity = DiffSeverity.MEDIUM if ratio <= 0.005 else DiffSeverity.HIGH
-        diffs.append(
-            Diff(
-                diff_id=f"EXACT_{key}_{uuid.uuid4().hex[:6]}",
-                diff_type=DiffType.NUMERIC,
-                diff_scope=DiffScope.CROSS_REPORT,
-                severity=severity,
-                triage="unresolved",
-                canonical_key=key,
-                topic=LocalizedString(zh=f"关键指标精确差异：{label}", en=f"Exact key metric mismatch: {label}"),
-                summary=LocalizedString(
-                    zh=f"{label}: A股 {a_value:,.2f}，H股 {h_value:,.2f}，精确差异 {delta:,.2f}",
-                    en=f"{label}: A={a_value:,.2f}, H={h_value:,.2f}, exact delta={delta:,.2f}",
-                ),
-                a_value=a_value,
-                h_value=h_value,
-                delta=delta,
-                tolerance=0.0,
-                evidence=evidence,
-                rule_id="key_metric_exact_mismatch",
-            )
-        )
-    return diffs
-
-
-def _exact_cross_report_mismatches(
     a_items: list[MetricItem] | dict[str, MetricItem],
     h_items: list[MetricItem] | dict[str, MetricItem],
 ) -> list[Diff]:
@@ -1070,6 +1044,10 @@ def _exact_cross_report_mismatches(
     h_by_key = _items_by_key(h_items)
     diffs: list[Diff] = []
     for key in sorted(set(a_by_key) & set(h_by_key)):
+        # key 级抑制：双侧全部出现点互相可解释（同角色/同口径/期间兼容的精确或
+        # 单位缩放匹配）时，该 key 跨报告已对平，剩余近似配对是多章节重述噪声。
+        if _key_fully_reconciled(a_by_key[key], h_by_key[key]):
+            continue
         candidates: list[tuple[float, int, int, MetricItem, MetricItem, float, float, float]] = []
         for a_item in a_by_key[key]:
             for h_item in h_by_key[key]:
@@ -1408,6 +1386,82 @@ def _unit_multiplier(unit: str | None) -> float:
 
 def _same_value(a_value: float, h_value: float) -> bool:
     return abs(a_value - h_value) <= 1e-9
+
+
+def _period_year(period: str | None) -> str | None:
+    if not period:
+        return None
+    match = re.search(r"(?:19|20)\d{2}", str(period))
+    return match.group(0) if match else None
+
+
+def _periods_compatible(a_item: MetricItem, h_item: MetricItem) -> bool:
+    """两侧期间一致（或一侧未知）才允许互相抑制/配对。
+
+    关键场景：swap 注入把本期/上期两列互换 —— 若不查期间，A 侧 2024 值会与
+    H 侧被换到 2023 列的同一个值「精确匹配」，整 key 被抑制，篡改被掩盖。
+    """
+    a_year = _period_year(a_item.period)
+    h_year = _period_year(h_item.period)
+    if a_year and h_year:
+        return a_year == h_year
+    return True
+
+
+def _unit_scaled_match(a_value: float, h_value: float, rel_tol: float = 1e-3) -> bool:
+    """10^k 量级缩放后可解释的值差视为匹配（千元/万元/百万元列示差）。"""
+    for scale in (1e3, 1e4, 1e6, 1e8, 1e-3, 1e-4, 1e-6, 1e-8):
+        scaled = h_value * scale
+        if abs(a_value - scaled) / max(abs(a_value), abs(scaled), 1.0) <= rel_tol:
+            return True
+    return False
+
+
+def _key_fully_reconciled(a_items: list[MetricItem], h_items: list[MetricItem]) -> bool:
+    """key 级抑制：双侧去重后的 (值, 期间) 出现点，互相都能在对面找到
+    同角色、同口径、期间兼容的精确/单位可解释匹配时，该 key 才算跨报告对平，
+    其余近似配对属于同报告多章节重述噪声（光大 84 条 unresolved 的来源）。
+
+    关键边界：任一单侧出现点找不到对应（如被篡改的次出现位置）则不抑制 ——
+    自一致性探针（A=A）下每个点都与自身匹配，全部抑制（self-check 零误报）；
+    而「A 侧主表被改、摘要未改」的场景中，被改值在 H 侧找不到对应，差异仍会报出。
+    """
+
+    def _distinct_points(items: list[MetricItem]) -> list[MetricItem]:
+        seen: set[tuple[float, str | None]] = set()
+        out: list[MetricItem] = []
+        for item in items:
+            value = _normalized_value(item)
+            if value is None:
+                continue
+            marker = (round(value, 6), _period_year(item.period))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            out.append(item)
+        return out
+
+    a_pts = _distinct_points(a_items)
+    h_pts = _distinct_points(h_items)
+    if not a_pts or not h_pts:
+        return False
+
+    def _matched(a_item: MetricItem, h_item: MetricItem) -> bool:
+        if not _same_metric_value_role(a_item, h_item):
+            return False
+        if not _same_reporting_scope(a_item, h_item):
+            return False
+        if not _periods_compatible(a_item, h_item):
+            return False
+        a_value = _normalized_value(a_item)
+        h_value = _normalized_value(h_item)
+        if a_value is None or h_value is None:
+            return False
+        return _same_value(a_value, h_value) or _unit_scaled_match(a_value, h_value)
+
+    return all(any(_matched(a, h) for h in h_pts) for a in a_pts) and all(
+        any(_matched(a, h) for a in a_pts) for h in h_pts
+    )
 
 
 def _label_for(*items: MetricItem) -> str:

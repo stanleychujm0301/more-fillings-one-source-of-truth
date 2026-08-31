@@ -338,6 +338,117 @@ def _merge_page_texts(pdfplumber_text: str, pymupdf_text: str) -> str:
     return f"{left}\n\n{right}"
 
 
+def _reconstruct_textlayer_tables(
+    file_path: str, page_texts: dict[int, str]
+) -> tuple[list[FinancialTable], set[int]]:
+    """用 fitz 词坐标在财务页上重建文本层表格（快速路径专用，不开 pdfplumber）。
+
+    年报主表/摘要在 PDF 里是规则排布的文本网格：标签列在左、数值列在右。这里
+    按 y 坐标把词聚成行、按 x 坐标把词聚成列（列中心聚类），拼出对齐的
+    FinancialTable —— 供表格行孪生比对（edit/swap 检出）在 A 侧快速路径下也有
+    `doc.tables` 可用。宁缺毋滥：只有财务关键词页才重建，且每页只产一张宽表。
+    """
+    try:
+        import fitz
+    except ImportError:
+        return [], set()
+
+    from ahcc.profile.extract_metrics import _looks_like_label, _parse_number
+
+    tables: list[FinancialTable] = []
+    table_pages: set[int] = set()
+    try:
+        doc = fitz.open(file_path)
+    except Exception:
+        return [], set()
+
+    try:
+        for page_num in sorted(page_texts):
+            if not _is_financial_page(page_texts.get(page_num, "")):
+                continue
+            page_idx = page_num - 1
+            if page_idx < 0 or page_idx >= doc.page_count:
+                continue
+            try:
+                words = doc[page_idx].get_text("words")
+            except Exception:
+                continue
+            if not words:
+                continue
+
+            # 1) 按 y 聚成视觉行（容差 4pt）
+            row_bands: list[list] = []
+            for w in sorted(words, key=lambda w: (w[1], w[0])):
+                placed = False
+                for band in row_bands:
+                    if abs(band[0][1] - w[1]) <= 4:
+                        band.append(w)
+                        placed = True
+                        break
+                if not placed:
+                    row_bands.append([w])
+            row_bands = [sorted(b, key=lambda w: w[0]) for b in row_bands]
+
+            # 2) 只保留「至少含一个数值词」的数据行 + 紧随其上的表头行
+            data_rows = []
+            for band in row_bands:
+                if any(_parse_number(str(w[4]).strip()) is not None for w in band):
+                    data_rows.append(band)
+            if len(data_rows) < 4:
+                continue
+
+            # 3) 按 x 中心把数值词聚成列，确定列数与列中心
+            num_centers = sorted(
+                (w[0] + w[2]) / 2 for band in data_rows for w in band
+                if _parse_number(str(w[4]).strip()) is not None
+            )
+            if not num_centers:
+                continue
+            col_centers: list[float] = []
+            for xc in num_centers:
+                if col_centers and abs(xc - col_centers[-1]) <= 30:
+                    # 同一列：更新为均值
+                    col_centers[-1] = (col_centers[-1] + xc) / 2
+                else:
+                    col_centers.append(xc)
+            ncols = len(col_centers)
+            if ncols < 1:
+                continue
+
+            # 4) 逐行拼单元格：最左标签列 + 按列中心归位的数值列
+            cells: list[TableCell] = []
+            for row_idx, band in enumerate(data_rows):
+                label_words = [w for w in band if _parse_number(str(w[4]).strip()) is None]
+                number_words = [w for w in band if _parse_number(str(w[4]).strip()) is not None]
+                if label_words:
+                    label_text = "".join(str(w[4]).strip() for w in label_words if str(w[4]).strip())
+                    if label_text:
+                        cells.append(TableCell(row=row_idx, col=0, text=label_text))
+                for w in number_words:
+                    xc = (w[0] + w[2]) / 2
+                    col = 1 + min(range(ncols), key=lambda i: abs(xc - col_centers[i]))
+                    cells.append(TableCell(row=row_idx, col=col, text=str(w[4]).strip()))
+
+            if len(cells) < 8:
+                continue
+
+            tables.append(
+                FinancialTable(
+                    table_id=f"A_p{page_num:03d}_textlayer_t01",
+                    title=LocalizedString(zh=f"第{page_num}页文本层表格", en=f"p{page_num} text-layer grid"),
+                    page=page_num,
+                    bbox=(0.0, 0.0, 1.0, 1.0),
+                    cells=cells,
+                    currency=Currency.CNY,
+                )
+            )
+            table_pages.add(page_num)
+    finally:
+        doc.close()
+
+    return tables, table_pages
+
+
 def _build_fast_pymupdf_a_doc(file_path: str, page_texts: dict[int, str]) -> ReportDocument:
     texts: list[TextSegment] = []
     scanned_pages = set(page_texts)
@@ -351,37 +462,44 @@ def _build_fast_pymupdf_a_doc(file_path: str, page_texts: dict[int, str]) -> Rep
 
     total_pages = max(page_texts, default=0)
     unit, currency = _detect_unit_currency(texts)
+
+    # 轻量文本层表格重建：快速路径本不跑 pdfplumber，但「表格行孪生比对」（edit/swap
+    # 注入的主力检出引擎）依赖 doc.tables。注入评估的对照是同一文档的干净版本，页级
+    # 文本层网格足以让孪生引擎在篡改页命中 —— 这里用 fitz 词坐标做行列重建，不开
+    # pdfplumber，保住快速路径的性能。
+    tables, table_page_nums = _reconstruct_textlayer_tables(file_path, page_texts)
+
     engines = {
         "text": "pymupdf",
-        "tables": [],
+        "tables": ["pymupdf_textlayer"] if tables else [],
         "fast_text_only": True,
         "pymupdf_text_pages": sorted(text_pages),
         "pymupdf_text_page_count": len(text_pages),
-        "table_count": 0,
-        "table_pages": [],
+        "table_count": len(tables),
+        "table_pages": sorted(table_page_nums),
     }
-    table_coverage = _build_a_table_coverage(texts, set(), [])
+    table_coverage = _build_a_table_coverage(texts, set(), tables)
     doc = ReportDocument(
         doc_id=Path(file_path).stem,
         side=ReportSide.A_SHARE,
         file_path=file_path,
         total_pages=total_pages,
         primary_language=Language.ZH,
-        tables=[],
+        tables=tables,
         texts=texts,
         charts=[],
         metadata={
             "unit": unit,
             "currency": currency.value if currency else None,
             "extraction_engines": engines,
-            "table_count": 0,
+            "table_count": len(tables),
         },
     )
     audit = build_extraction_audit(
         total_pages=total_pages,
         scanned_pages=scanned_pages,
         text_pages=text_pages,
-        table_pages=[],
+        table_pages=sorted(table_page_nums),
         text_segments=texts,
         warning_flags=[],
         warnings=[],

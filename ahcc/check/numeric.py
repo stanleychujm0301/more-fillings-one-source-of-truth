@@ -815,12 +815,35 @@ def _pair_for_score(key: str, pair_score: _PairScore, alignment_confidence: floa
     )
 
 
+def _period_year(period: str | None) -> str | None:
+    if not period:
+        return None
+    match = re.search(r"(?:19|20)\d{2}", str(period))
+    return match.group(0) if match else None
+
+
+def _periods_compatible(a_item: MetricItem, h_item: MetricItem) -> bool:
+    """两侧期间一致（或一侧未知）才允许互相抑制/配对。
+
+    关键场景：swap 注入把本期/上期两列互换 —— 若不查期间，A 侧本期值会与
+    H 侧被换到上期列的同一个值「精确匹配」，整 key 被抑制，篡改被掩盖。
+    """
+    a_year = _period_year(a_item.period)
+    h_year = _period_year(h_item.period)
+    if a_year and h_year:
+        return a_year == h_year
+    return True
+
+
 def _pair_match_kind(key: str, pair_score: _PairScore, rules: list[RuleDef], currency_factor: float | None) -> str | None:
     # 数值相等先判，且不受口径兼容性约束 —— 口径只在**确实存在差异**时才需要讨论。
     # 原实现在 context 不兼容时直接 return None，于是 A/H 数值完全相同的候选也会
     # 落到 _make_unresolved_candidate_diff，产出「口径不兼容，暂不判定」的待复核项。
     # 实测光大银行 A/H 有 22 条这样的零信息量条目（A 与 H 一模一样却要人去复核）。
+    # 但期间必须兼容：swap 注入（本期/上期列互换）会产生跨期精确匹配，不能据此抑制。
     if pair_score.direct_ratio <= 1e-9:
+        if not _periods_compatible(pair_score.a_item, pair_score.h_item):
+            return None
         return "direct"
 
     if not pair_score.context_compatible:
@@ -1052,24 +1075,38 @@ def run_numeric_checks_on_profiles(profile_a, profile_h) -> list[Diff]:
         if not pair_scores:
             continue
 
-        # 先找任何可解释匹配。只要全集候选中有同值/单位/币种换算后的匹配，
-        # 该 key 就不应再因为 primary 错选而报真实差异。
-        matched_scores: list[tuple[_PairScore, str]] = []
-        for score in pair_scores:
-            kind = _pair_match_kind(key, score, rules, currency_factor)
-            if kind:
-                matched_scores.append((score, kind))
+        # occurrence 级 1:1 贪心指派：按「可解释匹配 × 配对分数」降序，每条出现
+        # 只能消费/被消费一次。原实现「任一匹配即抑制整 key」会把真实冲突藏在
+        # 另一个可解释匹配后面（平安 self-check 18 条 FP 的镜像问题：同一个 key
+        # 的多处出现中，一对匹配上就让其余冲突全部消失）。
+        matchable = [
+            (score, kind)
+            for score in pair_scores
+            if (kind := _pair_match_kind(key, score, rules, currency_factor))
+        ]
+        matchable.sort(
+            key=lambda item: (
+                1 if item[1] == "currency_conversion" else 0,
+                item[0].context_compatible,
+                item[0].score,
+                -item[0].direct_ratio,
+            ),
+            reverse=True,
+        )
+        used_a: set[int] = set()
+        used_h: set[int] = set()
+        assignments: list[tuple[_PairScore, str]] = []
+        for score, kind in matchable:
+            a_id = id(score.a_item)
+            h_id = id(score.h_item)
+            if a_id in used_a or h_id in used_h:
+                continue
+            used_a.add(a_id)
+            used_h.add(h_id)
+            assignments.append((score, kind))
 
-        if matched_scores:
-            best_score, kind = max(
-                matched_scores,
-                key=lambda item: (
-                    1 if item[1] == "currency_conversion" else 0,
-                    item[0].context_compatible,
-                    item[0].score,
-                    -item[0].direct_ratio,
-                ),
-            )
+        if assignments:
+            best_score, kind = assignments[0]
             if kind == "currency_conversion" and currency_factor:
                 diffs.append(_make_currency_conversion_diff(key, best_score, currency_factor))
                 expected_matches += 1
@@ -1083,31 +1120,64 @@ def run_numeric_checks_on_profiles(profile_a, profile_h) -> list[Diff]:
                     matched_equal += 1
             else:
                 matched_equal += 1
+
+        # 未被任何可解释匹配消费的剩余出现点：双边都存在才是冲突候选。
+        leftover_scores = [
+            score
+            for score in pair_scores
+            if id(score.a_item) not in used_a and id(score.h_item) not in used_h
+        ]
+        if not leftover_scores:
             continue
 
-        best_score = max(pair_scores, key=lambda item: item.score)
-        if _is_high_conf_same_scope(best_score):
-            llm_reason = _llm_downgrade_reason(key, best_score)
+        best_leftover = max(leftover_scores, key=lambda item: item.score)
+        if _is_high_conf_same_scope(best_leftover):
+            llm_reason = _llm_downgrade_reason(key, best_leftover)
             if llm_reason:
                 diffs.append(
                     _make_unresolved_candidate_diff(
                         key,
-                        best_score,
+                        best_leftover,
                         f"llm_semantic_review:{llm_reason}",
                         rule_id="llm_semantic_review",
                     )
                 )
                 unresolved_candidates += 1
                 continue
-            pair = _pair_for_score(key, best_score)
+            pair = _pair_for_score(key, best_leftover)
+            # 剩余候选的「高置信同口径」仍可能是上游 scope/分类过滤漏网的口径伪影。
+            # 实测：青岛啤酒 4 条 critical FP（剩余对相差数百倍）；光大证券 2 条
+            # （公允价值变动收益 11.7%、其他债权投资 29.4% —— CAS/IFRS 分类口径差）。
+            # 真实篡改是微调数值（注入实测差异 ≤9.3%），>10% 的剩余候选差异几乎必然
+            # 是口径/分类问题 —— 降级为 unresolved，交给准则解读通道覆盖；该路径在
+            # 注入通道实测 0 命中，收紧不损失召回。
+            _a_lv = getattr(best_leftover, "a_norm", None) or 0.0
+            _h_lv = getattr(best_leftover, "h_norm", None) or 0.0
+            _lv_rel = abs(_a_lv - _h_lv) / max(abs(_a_lv), abs(_h_lv), 1e-9)
+            if _lv_rel > 0.1:
+                diffs.append(
+                    _make_unresolved_candidate_diff(
+                        key, best_leftover, "剩余候选差异量级异常，疑似口径伪影"
+                    )
+                )
+                unresolved_candidates += 1
+                continue
             pair_diffs = _check_pair(pair, rules)
+            for _pd in pair_diffs:
+                if _pd.rule_id is None:
+                    _pd.rule_id = "numeric_leftover_conflict"
             diffs.extend(pair_diffs)
             real_candidates += sum(1 for d in pair_diffs if d.triage == "real")
             expected_matches += sum(1 for d in pair_diffs if d.triage == "expected")
             continue
 
-        reason = "口径不兼容" if not best_score.context_compatible else "候选置信度不足"
-        diffs.append(_make_unresolved_candidate_diff(key, best_score, reason))
+        reason = "口径不兼容" if not best_leftover.context_compatible else "候选置信度不足"
+        # P0-4 卫生：非核心指标的「口径不兼容」零信息量候选不再产出 Diff（电信 36 条
+        # context_mismatch 噪声即来源于此）—— 只记日志统计，把预算留给核心指标。
+        if not best_leftover.context_compatible and key not in _CORE_KEYS:
+            logger.debug(f"数值候选甄别：跳过非核心指标的口径不兼容候选 key={key}")
+            continue
+        diffs.append(_make_unresolved_candidate_diff(key, best_leftover, reason))
         unresolved_candidates += 1
 
     logger.info(

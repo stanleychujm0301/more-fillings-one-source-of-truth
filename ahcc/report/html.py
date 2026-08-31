@@ -275,11 +275,8 @@ def _chart_card(title: str, png_path: Path) -> str:
     )
 
 
-def _build_diff_table(diffs: list[Diff]) -> str:
-    if not diffs:
-        return _section_eyebrow("差异总览 · ALL DIFFERENCES") + '<p class="muted">本次核查未识别差异。</p>'
+def _diff_table_rows(diffs: list[Diff]) -> str:
     sorted_diffs = sorted(diffs, key=lambda d: S.severity_rank(d.severity), reverse=True)
-    header = "<tr><th>差异ID</th><th>严重度</th><th>分流</th><th>类型</th><th>主题与说明</th><th>证据定位</th></tr>"
     rows = []
     for diff in sorted_diffs:
         sev_key = _norm_enum(diff.severity)
@@ -297,10 +294,37 @@ def _build_diff_table(diffs: list[Diff]) -> str:
               <td class="muted">{_esc(_evidence_location(diff))}</td>
             </tr>"""
         )
-    return (
-        _section_eyebrow(f"差异总览 · ALL DIFFERENCES（共 {len(diffs)} 条）")
-        + f'<table class="diff-table">{header}{"".join(rows)}</table>'
-    )
+    return "".join(rows)
+
+
+_DIFF_TABLE_HEADER = "<tr><th>差异ID</th><th>严重度</th><th>分流</th><th>类型</th><th>主题与说明</th><th>证据定位</th></tr>"
+
+
+def _build_diff_table(diffs: list[Diff]) -> str:
+    if not diffs:
+        return _section_eyebrow("差异总览 · ALL DIFFERENCES") + '<p class="muted">本次核查未识别差异。</p>'
+    # 三区呈现：真实差异展开；待复核/预期默认折叠，避免噪声淹没真实项
+    real = [d for d in diffs if _norm_enum(d.triage) == "real"]
+    unresolved = [d for d in diffs if _norm_enum(d.triage) == "unresolved"]
+    expected = [d for d in diffs if _norm_enum(d.triage) == "expected"]
+
+    parts = [_section_eyebrow(f"差异总览 · ALL DIFFERENCES（共 {len(diffs)} 条）")]
+    if real:
+        parts.append(
+            f'<h3 class="diff-group">真实差异（{len(real)}）</h3>'
+            f'<table class="diff-table">{_DIFF_TABLE_HEADER}{_diff_table_rows(real)}</table>'
+        )
+    if unresolved:
+        parts.append(
+            f'<details class="diff-group"><summary>待复核差异（{len(unresolved)}）— 点击展开</summary>'
+            f'<table class="diff-table">{_DIFF_TABLE_HEADER}{_diff_table_rows(unresolved)}</table></details>'
+        )
+    if expected:
+        parts.append(
+            f'<details class="diff-group"><summary>预期差异（{len(expected)}）— 点击展开</summary>'
+            f'<table class="diff-table">{_DIFF_TABLE_HEADER}{_diff_table_rows(expected)}</table></details>'
+        )
+    return "".join(parts)
 
 
 def _build_detail_cards(diffs: list[Diff], side_labels: dict[str, str]) -> str:

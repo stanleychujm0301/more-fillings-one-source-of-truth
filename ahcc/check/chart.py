@@ -1,11 +1,18 @@
-"""多模态图表三方核对（P4 实现）— 模块 C / 亮点 2。
+"""图表三方核对（P4 实现）— 模块 C / 亮点 2。
+
+deepseek-v4-pro 不支持图像输入（实测 HTTP 400），因此图表数据默认走**文本层抽取**：
+年报图表是矢量图，数据标签/坐标轴数值/图例都是真实文本对象，用 PyMuPDF 在图表
+bbox 内 `get_text("words", clip=bbox)` 直接读出，比 VLM 更确定、可审计。
 
 流程：
-1. 对 doc.charts 中每张图，调 VLM 抽数（饼图份额、柱图数值、折线趋势）
+1. 对 doc.charts 中每张图，按 chart_extract_mode 抽数（text_layer 默认 / vlm / off）
 2. 在同页/相邻页找：
    - 表格中对应数据
    - 文本中"零售业务占 35%"这类陈述
 3. 三方对比，输出 ChartCrossCheck
+
+「检测到图表但无可用数据」（纯位图扫描件无文本层）与「核对无异常」是两种不同结果，
+前者通过 module_warnings 透出，不静默。
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+import fitz  # PyMuPDF
 from loguru import logger
 
 from ahcc.config import settings
@@ -28,7 +36,39 @@ from ahcc.schemas import (
     ReportSide,
 )
 from ahcc.check.explanation import make_value_explanation
+from ahcc.check.chart_textlayer import extract_chart_textlayer_data
 from ahcc.vlm.qwen_vl import extract_chart_data
+
+
+def _resolve_chart_mode() -> str:
+    """解析图表抽取模式：废弃别名 enable_chart_vlm_check=True 强制 vlm，否则用 chart_extract_mode。"""
+    if getattr(settings, "enable_chart_vlm_check", False):
+        return "vlm"
+    mode = (getattr(settings, "chart_extract_mode", "text_layer") or "text_layer").strip().lower()
+    return mode if mode in ("text_layer", "vlm", "off") else "text_layer"
+
+
+# 进程级文档缓存：同一 PDF 的多张图表共享一个 fitz.Document，避免反复打开
+_DOC_CACHE: dict[str, fitz.Document] = {}
+
+
+def _page_for_chart(doc: ReportDocument, chart: ChartRegion) -> fitz.Page | None:
+    path = doc.file_path
+    if not path:
+        return None
+    try:
+        fdoc = _DOC_CACHE.get(path)
+        if fdoc is None:
+            fdoc = fitz.open(path)
+            _DOC_CACHE[path] = fdoc
+        # chart.page 为 1 基（report/证据口径），fitz 为 0 基
+        idx = chart.page - 1
+        if idx < 0 or idx >= fdoc.page_count:
+            return None
+        return fdoc.load_page(idx)
+    except Exception as exc:
+        logger.warning(f"图表文本层打开失败 {chart.chart_id} ({path}): {exc}")
+        return None
 
 
 async def run_chart_checks(doc_a: ReportDocument, doc_h: ReportDocument, max_charts: int = 15) -> list[Diff]:
@@ -36,22 +76,24 @@ async def run_chart_checks(doc_a: ReportDocument, doc_h: ReportDocument, max_cha
 
     Args:
         max_charts: 最多核对 N 张图表（Demo 场景下 15 张已足够展示能力）。
-            预算只计入「有图像、会真正调用 VLM」的图表，避免被空图表耗尽。
     """
-    # 仅保留有图像的图表（会真正触发 VLM），按预算跨两份报告截断
+    mode = _resolve_chart_mode()
+    if mode == "off":
+        logger.info("图表核对已关闭（chart_extract_mode=off）")
+        return []
+
     candidates = [
         (doc, chart)
         for doc in (doc_a, doc_h)
         for chart in doc.charts
-        if chart.image_path
     ][:max_charts]
 
-    # 并发核对，受 LLM 并发上限约束，避免打爆 provider
+    # 并发核对，受 LLM 并发上限约束（text_layer 模式不调 LLM，仅为统一闸口）
     sem = asyncio.Semaphore(max(1, settings.llm_concurrency))
 
     async def _guarded(doc: ReportDocument, chart: ChartRegion) -> Diff | None:
         async with sem:
-            return await _check_one_chart(doc, chart)
+            return await _check_one_chart(doc, chart, mode)
 
     results = await asyncio.gather(
         *[_guarded(doc, chart) for doc, chart in candidates],
@@ -60,41 +102,56 @@ async def run_chart_checks(doc_a: ReportDocument, doc_h: ReportDocument, max_cha
 
     diffs: list[Diff] = []
     failures = 0
+    no_text_layer = 0
     for res in results:
         if isinstance(res, Exception):
             failures += 1
             logger.warning(f"图表核对任务失败: {res}")
             continue
+        if res == "NO_TEXT_LAYER":
+            no_text_layer += 1
+            continue
         if res:
             diffs.append(res)
     logger.info(
-        f"图表核对完成，检查 {len(candidates)} 张图表，发现 {len(diffs)} 条异常"
+        f"图表核对完成（mode={mode}），检查 {len(candidates)} 张图表，发现 {len(diffs)} 条异常"
         + (f"，{failures} 张失败" if failures else "")
+        + (f"，{no_text_layer} 张无文本层数据" if no_text_layer else "")
     )
     return diffs
 
 
-async def _check_one_chart(doc: ReportDocument, chart: ChartRegion) -> Diff | None:
+async def _check_one_chart(doc: ReportDocument, chart: ChartRegion, mode: str = "text_layer") -> Diff | str | None:
     """单张图表的三方核对。
 
     步骤：
-    1. VLM 提取图表数据
+    1. 按 mode 抽取图表数据（text_layer 默认 / vlm）
     2. 在同页表格中查找对应数据
     3. 在同页/相邻页文本中查找对应陈述
     4. 比对三者一致性
-    """
-    # 1. VLM 提取
-    if not chart.image_path:
-        return None
 
-    try:
-        vlm_result = await asyncio.to_thread(extract_chart_data, chart.image_path)
-    except Exception as e:
-        logger.warning(f"VLM 提取失败 {chart.chart_id}: {e}")
-        return None
+    Returns:
+        Diff / None；文本层模式下纯位图无文本层时返回哨兵 "NO_TEXT_LAYER"。
+    """
+    # 1. 抽取图表数据
+    if mode == "vlm":
+        if not chart.image_path:
+            return None
+        try:
+            vlm_result = await asyncio.to_thread(extract_chart_data, chart.image_path)
+        except Exception as e:
+            logger.warning(f"VLM 提取失败 {chart.chart_id}: {e}")
+            return None
+    else:  # text_layer
+        page = _page_for_chart(doc, chart)
+        if page is None:
+            return "NO_TEXT_LAYER"
+        vlm_result = extract_chart_textlayer_data(page, chart)
+        if not vlm_result:
+            return "NO_TEXT_LAYER"
 
     if not vlm_result or not vlm_result.get("data_points"):
-        return None
+        return "NO_TEXT_LAYER" if mode == "text_layer" else None
 
     vlm_data_points = vlm_result.get("data_points", [])
     chart_title = vlm_result.get("title", "")

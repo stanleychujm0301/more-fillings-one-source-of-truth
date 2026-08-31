@@ -2033,6 +2033,8 @@ def test_extract_metrics_flags_non_key_cross_page_internal_inconsistency() -> No
 
 
 def test_report_document_internal_metric_inconsistency_becomes_a_internal_diff() -> None:
+    # 篡改签名：同页、小差异（2,000 vs 2,005 = 0.25%，须大于佐证容差 0.1%），
+    # H 侧佐证 2,000 → 2,005 为离群值
     a_front_table = FinancialTable(
         table_id="A_key_010",
         title=LocalizedString(en="Key accounting data"),
@@ -2042,19 +2044,19 @@ def test_report_document_internal_metric_inconsistency_becomes_a_internal_diff()
             TableCell(row=0, col=0, text="Item", is_header=True),
             TableCell(row=0, col=1, text="2025", is_header=True),
             TableCell(row=1, col=0, text="Revenue"),
-            TableCell(row=1, col=1, text="100"),
+            TableCell(row=1, col=1, text="2,000"),
         ],
     )
     a_note_table = FinancialTable(
         table_id="A_key_100",
         title=LocalizedString(en="Key accounting data"),
-        page=100,
+        page=10,
         bbox=(0.0, 0.0, 1.0, 1.0),
         cells=[
             TableCell(row=0, col=0, text="Item", is_header=True),
             TableCell(row=0, col=1, text="2025", is_header=True),
             TableCell(row=1, col=0, text="Revenue"),
-            TableCell(row=1, col=1, text="2,000"),
+            TableCell(row=1, col=1, text="2,005"),
         ],
     )
     h_table = FinancialTable(
@@ -2066,7 +2068,7 @@ def test_report_document_internal_metric_inconsistency_becomes_a_internal_diff()
             TableCell(row=0, col=0, text="Item", is_header=True),
             TableCell(row=0, col=1, text="2025", is_header=True),
             TableCell(row=1, col=0, text="Revenue"),
-            TableCell(row=1, col=1, text="100"),
+            TableCell(row=1, col=1, text="2,000"),
         ],
     )
     a_doc = ReportDocument(
@@ -2096,12 +2098,14 @@ def test_report_document_internal_metric_inconsistency_becomes_a_internal_diff()
 
     internal = next(diff for diff in diffs if diff.diff_scope == DiffScope.A_INTERNAL)
     assert internal.diff_type == DiffType.INTERNAL
-    assert internal.triage == "real"
+    # 单侧佐证保持待复核（不产 real / internal_value_conflict）—— 详见 compare.py 裁决注释
+    assert internal.triage == "unresolved"
+    assert internal.rule_id is None
     assert internal.diff_explanation is not None
-    assert internal.diff_explanation.items[0].a_value == 100.0
-    assert internal.diff_explanation.items[0].h_value == 2000.0
+    assert internal.diff_explanation.items[0].a_value == 2000.0
+    assert internal.diff_explanation.items[0].h_value == 2005.0
     assert internal.diff_explanation.items[0].a_page == 10
-    assert internal.diff_explanation.items[0].h_page == 100
+    assert internal.diff_explanation.items[0].h_page == 10
 
 
 def test_compare_metrics_triages_real_expected_and_keeps_evidence() -> None:
@@ -2556,7 +2560,37 @@ def test_numeric_checker_rejects_shareholder_table_false_extraction() -> None:
     assert not any(d.canonical_key == "total_profit" and d.triage == "real" for d in diffs)
 
 
-def test_cross_page_event_match_generates_matched_coverage() -> None:
+def test_numeric_swap_not_suppressed_by_cross_period_exact_match() -> None:
+    """swap 注入（本期/上期列互换）产生的跨期精确匹配不得抑制冲突。"""
+    a_cur = _metric("net_profit", 1000.0, ReportSide.A_SHARE, page=50, period="2025", snippet="净利润 2025 1,000")
+    a_prev = _metric("net_profit", 900.0, ReportSide.A_SHARE, page=50, period="2024", snippet="净利润 2024 900")
+    # H 侧被 swap：本期列成了 900、上期列成了 1000
+    h_cur = _metric("net_profit", 900.0, ReportSide.H_SHARE, page=40, period="2025", snippet="Net profit 2025 900")
+    h_prev = _metric("net_profit", 1000.0, ReportSide.H_SHARE, page=40, period="2024", snippet="Net profit 2024 1,000")
+    profile_a = _profile(ReportSide.A_SHARE, metrics=[_occ_many(a_cur, a_prev)])
+    profile_h = _profile(ReportSide.H_SHARE, metrics=[_occ_many(h_cur, h_prev)])
+
+    diffs = run_numeric_checks_on_profiles(profile_a, profile_h)
+
+    # 跨期精确匹配（A2025=H2024、A2024=H2025）不允许互相抑制，
+    # 同期冲突（1000 vs 900）必须暴露为 real
+    assert any(d.canonical_key == "net_profit" and d.triage == "real" for d in diffs)
+
+
+def test_numeric_secondary_occurrence_conflict_not_hidden_by_any_match() -> None:
+    """同一 key 一处对得上、另一处冲突：any-match 不得抑制整 key。"""
+    a_main = _metric("total_assets", 5000.0, ReportSide.A_SHARE, page=60, period="2025", snippet="资产总计 5,000")
+    a_note = _metric("total_assets", 4800.0, ReportSide.A_SHARE, page=120, period="2025", snippet="附注 资产总计 4,800")
+    h_main = _metric("total_assets", 5000.0, ReportSide.H_SHARE, page=30, period="2025", snippet="Total assets 5,000")
+    h_note = _metric("total_assets", 5000.0, ReportSide.H_SHARE, page=90, period="2025", snippet="Notes total assets 5,000")
+    profile_a = _profile(ReportSide.A_SHARE, metrics=[_occ_many(a_main, a_note)])
+    profile_h = _profile(ReportSide.H_SHARE, metrics=[_occ_many(h_main, h_note)])
+
+    diffs = run_numeric_checks_on_profiles(profile_a, profile_h)
+
+    # 主表 5000↔5000 对平后，附注 4800 的冲突仍必须报出，不能被 5000 匹配抑制
+    assert any(d.canonical_key == "total_assets" and d.triage == "real" for d in diffs)
+
     a_doc = ReportDocument(
         doc_id="A",
         side=ReportSide.A_SHARE,
@@ -3926,7 +3960,97 @@ def test_compare_profiles_reports_internal_consistency() -> None:
 
     diffs = compare_profiles(_profile(ReportSide.A_SHARE, metrics=[occ]), _profile(ReportSide.H_SHARE))
 
-    assert any(d.diff_type == "internal_inconsistency" and d.triage == "real" for d in diffs)
+    assert any(d.diff_type == "internal_inconsistency" and d.triage == "unresolved" for d in diffs)
+
+
+def test_check_internal_consistency_single_corroboration_stays_unresolved() -> None:
+    # 单侧佐证（含同页小差异形态）永远保持 unresolved：该形态无法区分真篡改与
+    # 上游标签混淆（净利润含少数 vs 归母映射同 key），实测在主办方样本上 0 独立命中、
+    # 持续产生 hard FP，real 检出交给 overlay / 位置孪生等有物理证据的通道。
+    first = _metric("total_assets", 1000.0, ReportSide.A_SHARE, page=1)
+    second = _metric("total_assets", 1002.0, ReportSide.A_SHARE, page=1)
+    occ = MetricOccurrences(
+        canonical_key="total_assets",
+        name=first.name,
+        primary=first,
+        all_occurrences=[first, second],
+        is_internally_consistent=False,
+    )
+    from ahcc.profile.models import InternalInconsistency
+
+    occ.internal_inconsistencies.append(
+        InternalInconsistency(item_a=first, item_b=second, delta=2.0, delta_pct=0.2)
+    )
+    # H 侧同指标取值佐证了 1000 —— 1002 是离群值，但仍保持待复核
+    h_match = _metric("total_assets", 1000.0, ReportSide.H_SHARE, page=7)
+    profile_h = _profile(ReportSide.H_SHARE, metrics=[_occ(h_match)])
+
+    diffs = compare_profiles(_profile(ReportSide.A_SHARE, metrics=[occ]), profile_h)
+
+    internal = next(d for d in diffs if d.diff_type == "internal_inconsistency")
+    assert internal.triage == "unresolved"
+    assert internal.rule_id is None
+    # 证据顺序保持 [离群值, 佐证值] 语义不再关键，但两侧证据都应在
+    assert {e.page for e in internal.evidence} == {1}
+
+
+def test_check_internal_consistency_large_delta_single_corroboration_stays_unresolved() -> None:
+    # 反例：跨页/大差异的单侧佐证多为合法多口径重述（合并 vs 母公司等），
+    # 不得提升为 real —— 青岛啤酒 85 条 hard FP 的教训
+    first = _metric("total_assets", 1000.0, ReportSide.A_SHARE, page=1)
+    second = _metric("total_assets", 1300.0, ReportSide.A_SHARE, page=1)
+    occ = MetricOccurrences(
+        canonical_key="total_assets",
+        name=first.name,
+        primary=first,
+        all_occurrences=[first, second],
+        is_internally_consistent=False,
+    )
+    from ahcc.profile.models import InternalInconsistency
+
+    occ.internal_inconsistencies.append(
+        InternalInconsistency(item_a=first, item_b=second, delta=300.0, delta_pct=23.1)
+    )
+    h_match = _metric("total_assets", 1000.0, ReportSide.H_SHARE, page=7)
+    profile_h = _profile(ReportSide.H_SHARE, metrics=[_occ(h_match)])
+
+    diffs = compare_profiles(_profile(ReportSide.A_SHARE, metrics=[occ]), profile_h)
+
+    internal = next(d for d in diffs if d.diff_type == "internal_inconsistency")
+    assert internal.triage == "unresolved"
+    assert internal.rule_id is None
+
+
+def test_check_internal_consistency_drops_both_sides_corroborated() -> None:
+    first = _metric("total_assets", 1000.0, ReportSide.A_SHARE, page=1)
+    second = _metric("total_assets", 1300.0, ReportSide.A_SHARE, page=1)
+    occ = MetricOccurrences(
+        canonical_key="total_assets",
+        name=first.name,
+        primary=first,
+        all_occurrences=[first, second],
+        is_internally_consistent=False,
+    )
+    from ahcc.profile.models import InternalInconsistency
+
+    occ.internal_inconsistencies.append(
+        InternalInconsistency(item_a=first, item_b=second, delta=300.0, delta_pct=23.1)
+    )
+    # H 侧同时有 1000 和 1300 —— 两侧都被佐证，视为正常多口径重申，丢弃
+    h_1000 = _metric("total_assets", 1000.0, ReportSide.H_SHARE, page=7)
+    h_1300 = _metric("total_assets", 1300.0, ReportSide.H_SHARE, page=7)
+    h_occ = MetricOccurrences(
+        canonical_key="total_assets",
+        name=h_1000.name,
+        primary=h_1000,
+        all_occurrences=[h_1000, h_1300],
+        is_internally_consistent=False,
+    )
+    profile_h = _profile(ReportSide.H_SHARE, metrics=[h_occ])
+
+    diffs = compare_profiles(_profile(ReportSide.A_SHARE, metrics=[occ]), profile_h)
+
+    assert not any(d.diff_type == "internal_inconsistency" for d in diffs)
 
 
 def test_disclosure_check_marks_internal_consistency_scope_by_report_side() -> None:
@@ -6190,7 +6314,7 @@ def test_legacy_history_upgrade_drops_numeric_and_event_false_positives(monkeypa
         ],
     )
 
-    assert summary["result_version"] == 16
+    assert summary["result_version"] == 17
     assert summary["real_diff_count"] == 5
     assert summary["expected_diff_count"] == 1
     assert summary["unresolved_diff_count"] == 1

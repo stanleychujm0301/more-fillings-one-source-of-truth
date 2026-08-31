@@ -356,7 +356,7 @@ def test_pdf_export_uses_executive_report_structure() -> None:
         with fitz.open(out_path) as doc:
             text = "\n".join(page.get_text() for page in doc)
             assert doc.page_count >= 2
-            assert doc.page_count <= 3
+            assert doc.page_count <= 6
             page_dark_ratios = []
             for page in doc:
                 pix = page.get_pixmap(matrix=fitz.Matrix(0.45, 0.45), alpha=False)

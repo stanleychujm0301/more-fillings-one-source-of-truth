@@ -1872,6 +1872,36 @@ def _internal_reporting_scope(item: MetricItem) -> str:
         return "segment"
     if _has_internal_marker(text, ("fairvalue", "riskexposure", "公允价值", "风险敞口")):
         return "valuation_detail"
+    # 多口径重申章节：内含价值 / 五年摘要 / 备考口径 与主表口径天然不同，
+    # 归入独立 scope（不再是 "main"），跨章节取值差不再被当作内部不一致 —
+    # 中国平安 88 条 unresolved noise（内含价值分析 vs 五年数据摘要）即来源于此。
+    if _has_internal_marker(
+        text,
+        ("embeddedvalue", "内含价值", "內含價值"),
+    ):
+        return "embedded_value"
+    if _has_internal_marker(
+        text,
+        (
+            "fiveyear",
+            "financialsummary",
+            "keyfinancial",
+            "highlights",
+            "五年数据",
+            "五年數據",
+            "数据摘要",
+            "數據摘要",
+            "财务摘要",
+            "財務摘要",
+            "主要会计数据",
+            "主要會計數據",
+            "主要财务指标",
+            "主要財務指標",
+        ),
+    ):
+        return "summary"
+    if _has_internal_marker(text, ("proforma", "备考", "備考")):
+        return "pro_forma"
     section = (item.evidence.section if item.evidence else "") or ""
     if len(re.findall(r"\d[\d,]*(?:\.\d+)?", section)) >= 2:
         return "line_detail"

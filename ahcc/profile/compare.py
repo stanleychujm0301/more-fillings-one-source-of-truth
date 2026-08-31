@@ -509,26 +509,89 @@ def compare_profiles(profile_a: ReportProfile, profile_h: ReportProfile) -> list
     diffs.extend(compare_metrics(profile_a, profile_h))
     diffs.extend(compare_narratives(profile_a, profile_h))
     diffs.extend(compare_structures(profile_a, profile_h))
-    diffs.extend(check_internal_consistency(profile_a))
-    diffs.extend(check_internal_consistency(profile_h))
+    diffs.extend(check_internal_consistency(profile_a, profile_h))
+    diffs.extend(check_internal_consistency(profile_h, profile_a))
     return diffs
 
 
-def check_internal_consistency(profile: ReportProfile) -> list[ProfileDiff]:
-    """Report internal inconsistencies within a single annual report."""
+def check_internal_consistency(
+    profile: ReportProfile,
+    other_profile: ReportProfile | None = None,
+) -> list[ProfileDiff]:
+    """单报告内部一致性 + 跨报告仲裁。
+
+    同一指标在一份年报的不同章节重复披露是常态（主表/摘要/附注口径不同），
+    直接把内部取值差报成差异会在干净对上产生大量噪声（平安 97 条单侧内部
+    差异即来源于此）。因此引入跨报告仲裁：
+
+    - 两个值都能在**另一份报告**同指标下找到（±0.1%）→ 正常多口径重申，丢弃；
+    - 恰好一个能找到 → 另一个是离群值：产 real 差异（rule_id=internal_value_conflict），
+      证据按 [离群值, 佐证值] 排序 —— 这是 edit 类篡改的第三条检出腿
+      （被改的值在另一份报告里必然失去佐证）；
+    - 都找不到 → 保留 unresolved（受全局待复核预算约束），两侧对称，
+      不再有 A-real/H-unresolved 的不对称。
+    """
+    other_values = _cross_value_index(other_profile) if other_profile is not None else {}
+
     diffs: list[ProfileDiff] = []
     for occ in profile.metrics:
         if not isinstance(occ, MetricOccurrences) or occ.is_internally_consistent:
             continue
         for inc in occ.internal_inconsistencies:
-            triage = "unresolved" if profile.side == ReportSide.H_SHARE else "real"
+            value_a = _normalized_metric_value(inc.item_a)
+            value_b = _normalized_metric_value(inc.item_b)
+            peers = other_values.get(occ.canonical_key, [])
+            a_corroborated = _value_corroborated(value_a, peers)
+            b_corroborated = _value_corroborated(value_b, peers)
+
+            if a_corroborated and b_corroborated:
+                # 双方都能在另一份报告找到 —— 正常多口径重申，不报
+                continue
+
+            if a_corroborated != b_corroborated and other_profile is not None:
+                # 恰好一方有佐证：无佐证的一方是离群值。
+                # 实测裁决：该形态在注入通道 0 命中（edit 是全文替换，不会留下同 key
+                # 双值；swap 双值都能在对方报告找到佐证），在主办方样本上 0 个独立命中
+                # （EPS 真阳性同时被 overlay 通道覆盖），却持续产生 hard FP ——
+                # 同页小差异形态下上游标签混淆（净利润含少数 vs 归母等映射到同 key）
+                # 与真篡改无法区分（青岛啤酒 3 条、光大银行 1 条残留 FP）。
+                # 结论：单侧佐证永远保持 unresolved（待复核预算兜底），real 检出交给
+                # overlay / 位置孪生等有物理证据的通道。
+                outlier, corroborated = (inc.item_b, inc.item_a) if a_corroborated else (inc.item_a, inc.item_b)
+                grade = _grade_internal_diff(inc.delta_pct)
+                triage = "unresolved"
+                severity = _severity_for_triage(triage, grade)
+                section_a = inc.item_a.evidence.section or f"第{inc.item_a.page}页"
+                section_b = inc.item_b.evidence.section or f"第{inc.item_b.page}页"
+                pages_u = sorted({inc.item_a.page, inc.item_b.page})
+                diffs.append(
+                    ProfileDiff(
+                        diff_type="internal_inconsistency",
+                        severity=severity,
+                        triage=triage,
+                        topic=occ.name,
+                        summary=LocalizedString(
+                            zh=f"{occ.name.zh or occ.canonical_key}: {section_a}为 {inc.item_a.value:,.2f}，{section_b}为 {inc.item_b.value:,.2f}，差异 {inc.delta_pct:.1f}%（另一份报告仅佐证其一）",
+                            en=f"{occ.name.en or occ.canonical_key}: {inc.item_a.value:,.2f} vs {inc.item_b.value:,.2f}, diff {inc.delta_pct:.1f}% (one side corroborated by counterpart)",
+                        ),
+                        canonical_key=occ.canonical_key,
+                        a_pages=pages_u if profile.side == ReportSide.A_SHARE else [],
+                        h_pages=pages_u if profile.side == ReportSide.H_SHARE else [],
+                        a_value=inc.item_a.value,
+                        h_value=inc.item_b.value,
+                        evidence=[inc.item_a.evidence, inc.item_b.evidence],
+                        rationale="同一指标在本报告内多处取值不一致，跨报告仅佐证其一；大概率为多口径重述或标签混淆，保持待复核",
+                        source="profile.internal",
+                    )
+                )
+                continue
+
+            # 双方都无佐证（或无对方画像）：保留待复核，两侧对称
+            triage = "unresolved"
             severity = _severity_for_triage(triage, _grade_internal_diff(inc.delta_pct))
             section_a = inc.item_a.evidence.section or f"第{inc.item_a.page}页"
             section_b = inc.item_b.evidence.section or f"第{inc.item_b.page}页"
             pages = sorted({inc.item_a.page, inc.item_b.page})
-            rationale = None
-            if triage == "unresolved":
-                rationale = "H股自身画像差异来自普通文本/表格抽取，可能涉及同页不同明细行或披露口径，需人工复核后再判定。"
             diffs.append(
                 ProfileDiff(
                     diff_type="internal_inconsistency",
@@ -545,11 +608,39 @@ def check_internal_consistency(profile: ReportProfile) -> list[ProfileDiff]:
                     a_value=inc.item_a.value,
                     h_value=inc.item_b.value,
                     evidence=[inc.item_a.evidence, inc.item_b.evidence],
-                    rationale=rationale,
+                    rationale="同一指标在本报告内多处取值不一致，且跨报告无法佐证任一取值，需人工复核",
                     source="profile.internal",
                 )
             )
     return diffs
+
+
+def _normalized_metric_value(item) -> float | None:
+    """归一到元：value × 单位乘数（复用 extract_metrics 的单位表）。"""
+    if getattr(item, "value", None) is None:
+        return None
+    from ahcc.profile.extract_metrics import _internal_unit_multiplier
+
+    return item.value * _internal_unit_multiplier(getattr(item, "unit", None))
+
+
+def _cross_value_index(other_profile: ReportProfile) -> dict[str, list[float]]:
+    """另一份报告每个 canonical_key 的归一化取值集合（仲裁佐证池）。"""
+    index: dict[str, list[float]] = {}
+    for occ in other_profile.metrics:
+        items = occ.all_occurrences if isinstance(occ, MetricOccurrences) else [occ]
+        for item in items:
+            value = _normalized_metric_value(item)
+            if value is None:
+                continue
+            index.setdefault(occ.canonical_key, []).append(value)
+    return index
+
+
+def _value_corroborated(value: float | None, peers: list[float], rel_tol: float = 1e-3) -> bool:
+    if value is None:
+        return False
+    return any(abs(value - p) / max(abs(value), abs(p), 1e-9) <= rel_tol for p in peers)
 
 
 def _grade_internal_diff(delta_pct: float) -> DiffSeverity:

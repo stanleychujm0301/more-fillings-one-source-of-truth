@@ -18,7 +18,7 @@ _FONT_REGISTERED = False
 _FONT_MAP: dict[str, str] = {}  # weight -> 已注册字体名
 _ILLEGAL_TEXT_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
 _MAX_TABLE_ROWS = 300
-_MAX_DETAIL_CARDS = 1
+_MAX_DETAIL_CARDS = 8
 
 
 def _clean_text(value: object) -> str:

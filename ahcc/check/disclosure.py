@@ -386,6 +386,7 @@ def _profile_diff_to_diff(pd) -> Diff:
         h_value=pd.h_value,
         evidence=pd.evidence,
         diff_explanation=diff_explanation,
+        rule_id=pd.rule_id,
     )
 
 
@@ -394,13 +395,31 @@ def _internal_profile_diff_explanation(pd, diff_scope: DiffScope) -> DiffExplana
     first_ev = pd.evidence[0] if len(pd.evidence) >= 1 else None
     second_ev = pd.evidence[1] if len(pd.evidence) >= 2 else None
     side_label = "A股报告" if diff_scope == DiffScope.A_INTERNAL else "H股报告"
+    other_label = "H股报告" if diff_scope == DiffScope.A_INTERNAL else "A股报告"
     label = pd.topic.zh or pd.topic.en or pd.canonical_key or "指标"
-    issue = (
-        f"{side_label}自身存在{label}取值不一致："
-        f"第一处为 {pd.a_value if pd.a_value is not None else '未记录'}，"
-        f"第二处为 {pd.h_value if pd.h_value is not None else '未记录'}。"
-    )
     pages = [str(ev.page) for ev in (first_ev, second_ev) if ev and ev.page]
+
+    if pd.rule_id == "internal_value_conflict":
+        # 跨报告仲裁后的离群值：第一处证据=离群取值，第二处=被另一份报告佐证的取值
+        issue = (
+            f"{side_label}自身存在{label}取值不一致："
+            f"第{first_ev.page}页为 {pd.a_value if pd.a_value is not None else '未记录'}，"
+            f"第{second_ev.page}页为 {pd.h_value if pd.h_value is not None else '未记录'}。"
+            f"{other_label}同指标取值与后者一致，前者的取值在另一份报告中缺乏佐证，疑似被篡改或抽取错误。"
+        )
+        review_hint = (
+            f"优先人工核对{side_label}第{first_ev.page}页的取值（另一份报告佐证了第{second_ev.page}页的取值）。"
+            if first_ev and second_ev and first_ev.page and second_ev.page
+            else f"优先人工核对{side_label}中的离群取值（另一处已获{other_label}佐证）。"
+        )
+    else:
+        issue = (
+            f"{side_label}自身存在{label}取值不一致："
+            f"第一处为 {pd.a_value if pd.a_value is not None else '未记录'}，"
+            f"第二处为 {pd.h_value if pd.h_value is not None else '未记录'}。"
+        )
+        review_hint = f"优先核对{side_label}内两个页码是否为同一期间、同一单位和同一披露口径。"
+
     return DiffExplanation(
         headline=f"{side_label}自身{label}不一致",
         issue=issue,
@@ -417,5 +436,5 @@ def _internal_profile_diff_explanation(pd, diff_scope: DiffScope) -> DiffExplana
                 h_snippet=second_ev.snippet if second_ev else None,
             )
         ],
-        review_hint=f"优先核对{side_label}内两个页码是否为同一期间、同一单位和同一披露口径。",
+        review_hint=review_hint,
     )

@@ -148,3 +148,4 @@ class ProfileDiff(BaseModel):
     expected: bool = False  # 是否为已知的合规差异
     rationale: Optional[str] = None  # 预期差异的解释
     source: Optional[str] = None
+    rule_id: Optional[str] = None  # 规则标识（如 internal_value_conflict），透传到 Diff

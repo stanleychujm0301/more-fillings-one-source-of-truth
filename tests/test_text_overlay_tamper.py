@@ -167,6 +167,24 @@ def test_scan_side_produces_diff_with_expected_shape(tmp_path: Path) -> None:
     assert all(ev.side == ReportSide.A_SHARE and ev.page == 1 for ev in diff.evidence)
 
 
+def test_overlay_evidence_snippet_is_real_page_text(tmp_path: Path) -> None:
+    """证据契约：snippet 必须是页面真实文本（证据链抽验逐词回核原文页），
+    不得混入「可见:/底层:」等合成判读措辞 —— 那些放 summary/diff_explanation。"""
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf, [[((100, 100), "126,311", 12), ((100, 100), "126,411", 12),
+                     ((80, 60), "营业收入", 12)]])
+
+    diff = scan_side(str(pdf), ReportSide.A_SHARE)[0]
+
+    for ev in diff.evidence:
+        assert "可见:" not in ev.snippet
+        assert "底层:" not in ev.snippet
+        assert "覆盖" not in ev.snippet
+    # 第一条证据为命中行原文摘录（含行内词），第二条为底层原值原文
+    assert "126,4" in diff.evidence[0].snippet or "营业收入" in diff.evidence[0].snippet
+    assert diff.evidence[1].snippet == "126,311"
+
+
 def test_run_text_overlay_checks_scans_both_sides_independently(tmp_path: Path) -> None:
     a_pdf = tmp_path / "a.pdf"
     h_pdf = tmp_path / "h.pdf"

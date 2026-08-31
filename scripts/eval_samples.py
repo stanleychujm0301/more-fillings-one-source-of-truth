@@ -152,10 +152,17 @@ def _flat_sample_pairs(directory: Path) -> list[tuple[str, Path, Path, Path]]:
     return pairs
 
 
-def _subdir_pairs(directory: Path) -> list[tuple[str, Path, Path, Optional[Path]]]:
-    """子目录式：每个子目录一对 A/H。"""
+def _subdir_pairs(
+    directory: Path,
+    exclude_names: frozenset[str] = frozenset(),
+) -> list[tuple[str, Path, Path, Optional[Path]]]:
+    """子目录式：每个子目录一对 A/H。exclude_names 命中子目录名时跳过（用于 fp 通道
+    剔除含错样本目录 sample/ —— 那些是带注入错误的测评对，不应计入干净对噪声）。"""
     pairs: list[tuple[str, Path, Path, Optional[Path]]] = []
     for sub in sorted(p for p in directory.iterdir() if p.is_dir()):
+        if sub.name in exclude_names:
+            print(f"[剔除] {sub.name}（--exclude）")
+            continue
         pdfs = sorted(sub.glob("*.pdf"))
         if len(pdfs) < 2:
             continue
@@ -334,13 +341,15 @@ def cmd_fp(
     samples_dir: Path = typer.Option(..., help="真实 A/H 样本根目录（每个子目录一对）"),
     out: Path = typer.Option(Path("storage/eval"), help="输出目录"),
     sample_per_bucket: int = typer.Option(20, help="每个分桶的抽检条数"),
+    exclude: Optional[str] = typer.Option(None, "--exclude", help="按子目录名剔除（逗号分隔），如 sample"),
 ) -> None:
     """真实 A/H 样本的误报上界 + 人工抽检工作簿（不需要标准答案）。"""
     out.mkdir(parents=True, exist_ok=True)
     context = _run_context("fp-upper-bound")
     rows: list[tuple[str, dict, float]] = []
+    exclude_names = frozenset(s.strip() for s in exclude.split(",") if s.strip()) if exclude else frozenset()
 
-    for name, a, h, _ in _subdir_pairs(samples_dir):
+    for name, a, h, _ in _subdir_pairs(samples_dir, exclude_names=exclude_names):
         print(f"\n=== {name} ===")
         start = time.time()
         try:

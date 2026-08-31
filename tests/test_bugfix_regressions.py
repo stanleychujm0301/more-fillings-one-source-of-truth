@@ -66,10 +66,14 @@ def test_find_table_matches_skips_empty_label_cell() -> None:
 
 
 async def test_run_chart_checks_budget_only_counts_charts_with_image(monkeypatch) -> None:
-    """P0-3：无图像的图表不应消耗 max_charts 预算，也不应触发核对。"""
+    """文本层模式下不再按 image_path 预算图表 —— 所有检测到的图表区域都参与核对。
+
+    旧契约：无图像的图表不消耗 max_charts 预算（VLM 时代只有截图才会触发调用）。
+    新契约（P1-C 文本层路线）：图表数据来自 bbox 内文本层，无需截图，全部区域都核对。
+    """
     calls: list[str] = []
 
-    async def fake_check_one(doc, chart):
+    async def fake_check_one(doc, chart, mode="text_layer"):
         calls.append(chart.chart_id)
         return None
 
@@ -98,8 +102,8 @@ async def test_run_chart_checks_budget_only_counts_charts_with_image(monkeypatch
     diffs = await run_chart_checks(doc, empty, max_charts=15)
 
     assert diffs == []
-    # 只核对有 image_path 的两张，无图像的被跳过
-    assert sorted(calls) == ["img1", "img2"]
+    # 文本层模式：三张图表区域全部参与核对（不再以 image_path 为预算口径）
+    assert sorted(calls) == ["img1", "img2", "noimg"]
 
 
 def test_equity_section_code_has_no_leading_space() -> None:
