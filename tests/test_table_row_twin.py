@@ -204,3 +204,60 @@ def test_build_table_rows_roles_from_header():
     assert ("营业收入", "2024") in tr.rows
     assert ("营业收入", "2023") in tr.rows
     assert tr.rows[("营业收入", "2024")].value == 100000.0
+
+
+# ---------------------------------------------------------------------------
+# 「稀疏」假设的例外：整列被打乱
+# ---------------------------------------------------------------------------
+
+# 值都带零头，避免整千整万被判为「不具区分度」
+_DISTINCT_ROWS = [
+    ["营业收入", "810,136", "443,188"],
+    ["营业成本", "338,488", "286,699"],
+    ["销售费用", "101,325", "120,269"],
+    ["管理费用", "124,849", "145,884"],
+    ["研发费用", "270,506", "148,301"],
+    ["财务费用", "133,318", "128,362"],
+    ["营业利润", "207,369", "100,509"],
+    ["利润总额", "343,879", "121,801"],
+    ["所得税费用", "51,878", "48,288"],
+    ["净利润", "96,135", "39,541"],
+]
+
+
+def _rotate_first_value_column(rows: list[list[str]]) -> list[list[str]]:
+    """把第一个数值列整体轮转一位 —— 其余列原位不动。"""
+    column = [r[1] for r in rows]
+    return [[r[0], column[(i + 1) % len(rows)], r[2]] for i, r in enumerate(rows)]
+
+
+def test_column_permutation_bypasses_low_anchor_and_overflow_gates():
+    """整列被打乱：几乎每行都不同，却没有任何新值出现 —— 是真差异，不是配对失败。"""
+    a_rows = _clone_rows(_DISTINCT_ROWS)
+    h_rows = _rotate_first_value_column(_clone_rows(_DISTINCT_ROWS))
+    doc_a = _doc(ReportSide.A_SHARE, [_table("A_p130_t01", 130, a_rows, _HEADER)])
+    doc_h = _doc(ReportSide.H_SHARE, [_table("H_p129_t01", 129, h_rows, _HEADER)])
+
+    diffs, stats = run_table_row_twin_checks(doc_a, doc_h)
+
+    # 10 行全部错位，远超 _MAX_DIFFS_PER_TABLE，但不应被熔断丢弃
+    assert len(diffs) == len(_DISTINCT_ROWS) > _MAX_DIFFS_PER_TABLE
+    assert stats.permuted_tables == 1
+    assert stats.skipped_low_anchor == 0
+    assert stats.dropped_overflow_tables == 0
+    assert all(d.triage == "real" for d in diffs)
+    assert all("整列错乱" in d.summary.zh for d in diffs)
+
+
+def test_round_number_permutation_is_not_treated_as_column_shuffle():
+    """整千整万的圆整数表里跨行同值是巧合，不能据此放开熔断。"""
+    a_rows = _clone_rows(_BASE_ROWS)  # 值全是整千
+    h_rows = _rotate_first_value_column(_clone_rows(_BASE_ROWS))
+    doc_a = _doc(ReportSide.A_SHARE, [_table("A_p010_t01", 10, a_rows, _HEADER)])
+    doc_h = _doc(ReportSide.H_SHARE, [_table("H_p010_t01", 10, h_rows, _HEADER)])
+
+    diffs, stats = run_table_row_twin_checks(doc_a, doc_h)
+
+    assert diffs == []
+    assert stats.permuted_tables == 0
+    assert stats.skipped_low_anchor == 1

@@ -380,17 +380,23 @@ def cmd_fp(
         "> 差异都是待人工确认的条目，其**全量条数即 FP 上界**。抽检确认后用 Wilson 区间",
         "> 给出 FP 率的区间估计（见各样本的 `_fp.xlsx` 「人工抽检」表）。",
         "",
-        "| 样本对 | 耗时(s) | 跨报告·real | 跨报告·unresolved | 跨报告·expected | 单侧内部 |",
-        "|---|---|---|---|---|---|",
+        "> **「已核实真差异」列不计入 FP 上界。** 这 7 组并非全部干净 —— 已有原始文档",
+        "> 证据链佐证为真的检出登记在 `ahcc/eval/probes.py::KNOWN_TRUE_POSITIVES`，",
+        "> 单列一栏。否则「干净对 FP=0」会变成奖励删检出的指标。",
+        "",
+        "| 样本对 | 耗时(s) | 跨报告·real | 已核实真差异 | 跨报告·unresolved | 跨报告·expected | 单侧内部 |",
+        "|---|---|---|---|---|---|---|",
     ]
     for name, b, elapsed in rows:
         lines.append(
             f"| {name} | {elapsed:.0f} | **{b.get('cross_report_real', 0)}** | "
+            f"{b.get('known_true_positive', 0)} | "
             f"{b.get('cross_report_unresolved', 0)} | {b.get('cross_report_expected', 0)} | "
             f"{b.get('internal', 0)} |"
         )
     total_real = sum(b.get("cross_report_real", 0) for _, b, _ in rows)
-    lines.append(f"| **合计** | - | **{total_real}** | - | - | - |")
+    total_known = sum(b.get("known_true_positive", 0) for _, b, _ in rows)
+    lines.append(f"| **合计** | - | **{total_real}** | {total_known} | - | - | - |")
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nFP 上界已写入：{md}")
 

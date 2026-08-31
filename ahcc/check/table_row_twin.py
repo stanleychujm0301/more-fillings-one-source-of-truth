@@ -19,6 +19,14 @@
 - 每张表配对要求 ≥90% 的匹配行在因子下吻合，错位/错配的表整表放弃；
 - 每表最多 5 条、每任务最多 40 条熔断 —— 篡改是稀疏事件，超量即配对错误。
 
+「稀疏」假设的例外：整列被打乱
+------------------------------
+上面两道闸都假设篡改稀疏。**整列被打乱**恰好违反该假设 —— 几乎每行都不同，
+却没有出现任何一个新值（H 侧数值集合与 A 侧完全相同，只是配错了行）。
+实测光大银行分支机构资产规模表即为此形态（44 行错 40 行）。
+`_is_column_permutation` 识别这种形态并让它绕过低锚点/超量两道闸，
+按真实差异出报，summary 里注明「整列错乱」。
+
 产出 rule_id="table_row_value_conflict"，triage="real"，供评估匹配器
 （ahcc/eval/matcher.py：页码 ±2 + 篡改值 token + triage=real + severity≥medium）
 直接命中。
@@ -28,6 +36,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Optional
@@ -106,6 +115,7 @@ class TwinCheckStats:
     paired_tables: int = 0
     skipped_low_anchor: int = 0
     dropped_overflow_tables: int = 0
+    permuted_tables: int = 0
     diffs_emitted: int = 0
     diffs_capped: int = 0
 
@@ -197,6 +207,30 @@ def _best_factor(pairs: list[tuple[float, float]]) -> tuple[Optional[float], int
     return best_factor, best_hits
 
 
+def _is_column_permutation(pairs: list[tuple[float, float]]) -> bool:
+    """两侧取值是否互为排列 —— 「整列被打乱」型篡改的判据。
+
+    低锚点跳过与超量放弃这两道闸都建立在「篡改是稀疏事件」的假设上，
+    整列被打乱恰好违反该假设：几乎每行都不同，却没有任何一个新值出现 ——
+    H 侧数值集合与 A 侧完全相同，只是配错了行。这种密集差异是真的，不是噪声。
+
+    要求多重集**完全**相等（不允许缺行）、样本量够大、且值有区分度，
+    避免整千整万的圆整数表凑巧命中。
+    """
+    from ahcc.check.table_row_align import _is_distinctive_value
+
+    if len(pairs) < _MIN_MATCHED_KEYS:
+        return False
+    a_values = [a for a, _ in pairs]
+    h_values = [h for _, h in pairs]
+    if sum(1 for v in a_values if _is_distinctive_value(v)) < len(a_values) * 0.6:
+        return False
+    if Counter(round(v, 4) for v in a_values) != Counter(round(v, 4) for v in h_values):
+        return False
+    # 至少要有两行真的错位，否则「排列」只是全等表
+    return sum(1 for a, h in pairs if _rel_delta(a, h) > _DIFF_MIN_REL) >= 2
+
+
 def _pair_score_label_overlap(a: _TableRows, h: _TableRows) -> float:
     if not a.labels or not h.labels:
         return 0.0
@@ -205,7 +239,7 @@ def _pair_score_label_overlap(a: _TableRows, h: _TableRows) -> float:
     return inter / union if union else 0.0
 
 
-def _make_diff(a_row: _RowValue, h_row: _RowValue, factor: float) -> Diff:
+def _make_diff(a_row: _RowValue, h_row: _RowValue, factor: float, *, permuted: bool = False) -> Diff:
     h_display_value = h_row.value
     delta = abs(a_row.value - h_display_value)
     rel = _rel_delta(a_row.value, h_display_value)
@@ -217,9 +251,12 @@ def _make_diff(a_row: _RowValue, h_row: _RowValue, factor: float) -> Diff:
                  snippet=h_row.snippet, section=None),
     ]
     unit_note = "" if factor == 1.0 else f"（已按因子 {factor:g} 归一列示单位后仍不一致）"
+    permuted_note = (
+        "（该表取值整列错乱：两侧数值集合完全相同，但对应的行不同）" if permuted else ""
+    )
     summary_zh = (
         f"{a_row.label}（{a_row.role}）：A 股第{a_row.page}页为 {a_row.raw}，"
-        f"H 股第{h_row.page}页为 {h_row.raw}，相对差异 {rel*100:.2f}%{unit_note}"
+        f"H 股第{h_row.page}页为 {h_row.raw}，相对差异 {rel*100:.2f}%{unit_note}{permuted_note}"
     )
     return Diff(
         diff_id=f"ROWTWIN_{uuid.uuid4().hex[:8]}",
@@ -302,9 +339,14 @@ def run_table_row_twin_checks(
                 continue
             pairs = [(at.rows[k].value, ht.rows[k].value) for k in matched_keys]
             factor, hits = _best_factor(pairs)
+            permuted = False
             if factor is None or hits / len(matched_keys) < _MIN_ANCHOR_RATIO:
-                stats.skipped_low_anchor += 1
-                continue
+                if not _is_column_permutation(pairs):
+                    stats.skipped_low_anchor += 1
+                    continue
+                # 整列被打乱：低锚点不是配对失败，而正是篡改本身的形态
+                permuted = True
+                factor = 1.0
 
             # 配对成功：残差即差异
             table_diffs: list[Diff] = []
@@ -313,11 +355,18 @@ def run_table_row_twin_checks(
                 if _rel_delta(a_row.value, h_row.value * factor) <= _DIFF_MIN_REL:
                     continue
                 # 残差必须不是单位展示问题之外的小数噪声：相对差异超过容差即报
-                table_diffs.append(_make_diff(a_row, h_row, factor))
-            if len(table_diffs) > _MAX_DIFFS_PER_TABLE:
+                table_diffs.append(_make_diff(a_row, h_row, factor, permuted=permuted))
+            if len(table_diffs) > _MAX_DIFFS_PER_TABLE and not permuted:
                 # 超量 = 配对错误（真实篡改是稀疏的），整表放弃
                 stats.dropped_overflow_tables += 1
                 continue
+            if permuted and table_diffs:
+                stats.permuted_tables += 1
+                logger.info(
+                    "表格行孪生比对：第{}页表格取值整列错乱（{}/{} 行不同，两侧数值集合相同），"
+                    "按真实差异出报",
+                    at.table.page, len(table_diffs), len(matched_keys),
+                )
 
             stats.paired_tables += 1
             used_h.add(h_idx)
@@ -330,9 +379,10 @@ def run_table_row_twin_checks(
 
     stats.diffs_emitted = len(diffs)
     logger.info(
-        "表格行孪生比对: A表={} H表={} 候选对={} 配对={} 低锚点跳过={} 超量放弃={} 差异={} 熔断丢弃={}",
+        "表格行孪生比对: A表={} H表={} 候选对={} 配对={} 低锚点跳过={} 超量放弃={} "
+        "整列错乱={} 差异={} 熔断丢弃={}",
         stats.tables_a, stats.tables_h, stats.candidate_pairs, stats.paired_tables,
-        stats.skipped_low_anchor, stats.dropped_overflow_tables,
+        stats.skipped_low_anchor, stats.dropped_overflow_tables, stats.permuted_tables,
         stats.diffs_emitted, stats.diffs_capped,
     )
     return diffs, stats

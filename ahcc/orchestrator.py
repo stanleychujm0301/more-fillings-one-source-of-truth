@@ -539,6 +539,11 @@ class Orchestrator:
             )
 
         def _duplicates(a, b) -> bool:
+            # 只跨规则去重。同一规则内部的重复由 _dedupe_identical_diffs 负责 ——
+            # 排列型篡改（整列被打乱）下，同一规则每条差异的 h_value 必然等于另一条的
+            # a_value，页码又天然相邻，同规则合并会把 40 条真实差异砍成 18 条。
+            if (a.rule_id or "") == (b.rule_id or ""):
+                return False
             if not _claimed_values(a) or not _claimed_values(b):
                 return False
             pages_a, pages_b = _side_pages(a), _side_pages(b)
@@ -887,6 +892,11 @@ class Orchestrator:
                 "severity": "medium",
                 "blocking": False,
             })
+        # 行错位自检否决整表时透出预警 —— 否则「本表不出结论」与「本表没有问题」
+        # 在报告里长得一模一样。
+        alignment_warning = branch_diagnostics.get("branch_alignment_warning")
+        if isinstance(alignment_warning, dict):
+            warnings.append(alignment_warning)
         return warnings
 
     def _collect_doc_extraction_warnings(self, doc_a: ReportDocument, doc_h: ReportDocument) -> list[dict]:

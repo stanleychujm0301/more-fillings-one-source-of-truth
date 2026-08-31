@@ -8,7 +8,8 @@
 1. 主办方 3 组含错误样本（光大银行/长城汽车/青岛啤酒，各 15 处植入错误）：
    文本层叠加篡改检测应 45/45 全检出、页码与数值对与官方错误清单一致、零多报；
 2. 干净年报 PDF 上叠加检测零误报；
-3. 光大银行真实 A+H 年报：分支机构核查应稳定产出恰好 40 条 BRANCH_* 差异。
+3. 光大银行真实 A+H 年报：分支机构核查应稳定产出恰好 40 条 BRANCH_* 差异
+   （H 稿「资产规模」整列被打乱，详见对应用例的 docstring）。
 """
 
 from __future__ import annotations
@@ -111,14 +112,26 @@ def test_overlay_zero_false_positives_on_clean_reports(rel_path: str) -> None:
     assert hits == [], f"误报 {len(hits)} 条: {[(h.page, h.visible_value, h.hidden_value) for h in hits[:5]]}"
 
 
-def test_branch_checks_zero_diffs_on_ceb_real_pair(caplog) -> None:
-    """光大银行真实 A+H 年报 —— 分支机构表行错位自检命中后不出结论（0 差异 + 错位预警）。
+def test_branch_checks_find_exactly_40_diffs_on_ceb_real_pair() -> None:
+    """光大银行真实 A+H 年报 —— 用户口径的「本身已有错误」：分支机构 40 处不一致。
 
-    修复前旧契约断言「恰好 40 条 branch_asset_scale_match」，实测那是 H 侧数值整体
-    错开一行导致的解析错位，不是 40 处真实不一致。新契约：行错位自检否决比对，
-    产出 0 条差异并记录行错位预警。
+    这 40 处是真差异，不是抽取错位。判据（本用例一并固化）：
+
+    - 44/44 行的机构数量两侧一致；
+    - 44/44 行的办公地址两侧一致；
+    - 跨名称命中 40 行，其中锚点跟着数值一起移动的 0 行；
+    - 两侧资产规模多重集完全相等（纯排列）。
+
+    另有外部佐证：官方正式版 H 报告（316 页 InDesign 版）与 A 报告逐行一致，
+    说明被核查的这份 H 稿（352 页 Word 版）「资产规模」整列被打乱。
     """
-    from ahcc.check.branch_disclosure import run_branch_checks
+    from ahcc.check.branch_disclosure import (
+        _branch_row_alignment,
+        extract_branch_table,
+        load_branch_lightweight_doc,
+        run_branch_checks,
+    )
+    from ahcc.schemas import ReportSide
 
     root = _samples_root()
     a_pdf = root / "光大银行" / "A 中国光大银行股份有限公司2025年年度报告.pdf"
@@ -126,17 +139,33 @@ def test_branch_checks_zero_diffs_on_ceb_real_pair(caplog) -> None:
     if not a_pdf.is_file() or not h_pdf.is_file():
         pytest.skip("CEB real A/H pair missing")
 
-    with caplog.at_level("WARNING"):
-        diffs, diagnostics = run_branch_checks(str(a_pdf), str(h_pdf))
+    diffs, diagnostics = run_branch_checks(str(a_pdf), str(h_pdf))
 
-    assert diffs == [], f"expected 0 branch diffs after row-misalignment gate, got {len(diffs)}"
-    assert any("错位" in rec.message or "misalign" in rec.message.lower() for rec in caplog.records), (
-        "expected a row-misalignment warning in logs"
-    )
+    assert len(diffs) == 40, f"expected 40 branch diffs, got {len(diffs)}"
+    assert all(d.rule_id == "branch_asset_scale_match" for d in diffs)
+    assert all(d.triage == "real" for d in diffs)
+    assert diagnostics["branch_diff_count"] == 40
+    assert "branch_alignment_warning" not in diagnostics, "真实差异不应被记成抽取预警"
+
+    # 判据本身：锚点稳定、多重集相等 —— 这才是「列错乱」而非「行错位」的证据
+    a_branches = extract_branch_table(load_branch_lightweight_doc(str(a_pdf), ReportSide.A_SHARE))
+    h_branches = extract_branch_table(load_branch_lightweight_doc(str(h_pdf), ReportSide.H_SHARE))
+    matched = sorted(set(a_branches) & set(h_branches))
+    assert len(matched) == 44
+    assert all(a_branches[n]["count"] == h_branches[n]["count"] for n in matched)
+    assert all(a_branches[n]["address"] == h_branches[n]["address"] for n in matched)
+
+    alignment = _branch_row_alignment(a_branches, h_branches)
+    assert alignment.anchors_available
+    assert alignment.anchor_moved_hits == []
+    assert len(alignment.anchor_stable_hits) == 40
+    assert alignment.value_multiset_equal
+    assert alignment.is_column_permuted
+    assert alignment.comparable
 
 
-def test_branch_checks_zero_diffs_on_sample_pair(caplog) -> None:
-    """sample 目录里的光大银行对（含错误 A 股 + 同一份 H 股）同样应被行错位自检拦下。"""
+def test_branch_checks_find_40_diffs_on_sample_pair() -> None:
+    """sample 目录里的光大银行对用的是同一份 H 稿，因此同样是 40 处。"""
     from ahcc.check.branch_disclosure import run_branch_checks
 
     root = _samples_root()
@@ -145,7 +174,7 @@ def test_branch_checks_zero_diffs_on_sample_pair(caplog) -> None:
     if not a_pdf.is_file() or not h_pdf.is_file():
         pytest.skip("CEB sample pair missing")
 
-    with caplog.at_level("WARNING"):
-        diffs, _ = run_branch_checks(str(a_pdf), str(h_pdf))
+    diffs, diagnostics = run_branch_checks(str(a_pdf), str(h_pdf))
 
-    assert diffs == [], f"expected 0 branch diffs after row-misalignment gate, got {len(diffs)}"
+    assert len(diffs) == 40, f"expected 40 branch diffs, got {len(diffs)}"
+    assert diagnostics["branch_diff_count"] == 40

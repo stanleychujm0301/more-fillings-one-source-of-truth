@@ -10,7 +10,7 @@ import re
 from loguru import logger
 
 from ahcc.align.glossary import to_simplified
-from ahcc.check.table_row_align import check_row_alignment, log_report
+from ahcc.check.table_row_align import alignment_warning, check_row_alignment, log_report
 from ahcc.schemas import (
     Diff,
     DiffSeverity,
@@ -24,7 +24,14 @@ from ahcc.schemas import (
 )
 from ahcc.check.explanation import make_value_explanation
 
-_BRANCH_ROW_PATTERN = re.compile(r"([一-龥]{2,6}分行)\s+(\d{1,3})\s+([\d,]{5,12})")
+# 名称 + 机构数量 + 资产规模 + 办公地址。地址是判别「整行错位 vs 整列错乱」的共位锚点。
+# 地址懒惰匹配并在「行尾」或「下一条分支机构行的开头」处停 —— 表格文本既可能一行一段
+# （真实 PDF），也可能整表挤在一行（测试夹具/单列 cell 拼接），贪心到行尾会吞掉后续行。
+_BRANCH_ROW_SIGNATURE = r"[一-龥]{2,6}分行\s+\d{1,3}\s+[\d,]{5,12}"
+_BRANCH_ROW_PATTERN = re.compile(
+    r"([一-龥]{2,6}分行)\s+(\d{1,3})\s+([\d,]{5,12})"
+    r"[ \t]*([^\n]*?)(?=$|\n|\s*" + _BRANCH_ROW_SIGNATURE + r")"
+)
 _BRANCH_NAME_T2S_OVERRIDES = str.maketrans(
     {
         "廣": "广",
@@ -104,7 +111,7 @@ def branch_table_diagnostics(
         if diffs is not None
         else _count_branch_asset_diffs(a_branches, h_branches, matched_names)
     )
-    return {
+    diagnostics: dict[str, object] = {
         "branch_source_doc_available": source_doc_available,
         "a_branch_count": len(a_branches),
         "h_branch_count": len(h_branches),
@@ -112,6 +119,14 @@ def branch_table_diagnostics(
         "branch_diff_count": branch_diff_count,
         "branch_alignment_ratio": _branch_alignment_ratio(a_branches, h_branches, matched_names),
     }
+    # 整表被错位自检否决时必须留痕 —— 否则「不出结论」在报告里与「没有问题」无法区分。
+    if a_branches and h_branches and matched_names:
+        alignment = _branch_row_alignment(a_branches, h_branches)
+        if not alignment.comparable:
+            diagnostics["branch_alignment_warning"] = alignment_warning(
+                alignment, table_label="分支机构资产规模", side_hint="H"
+            )
+    return diagnostics
 
 
 def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None:
@@ -120,6 +135,7 @@ def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None
         name = _normalize_branch_name(raw_name)
         count_str = match.group(2)
         asset_str = match.group(3)
+        address = _normalize_branch_name(match.group(4))
 
         try:
             count = int(count_str)
@@ -134,6 +150,7 @@ def _add_branch_matches(branches: dict[str, dict], text: str, page: int) -> None
                 "raw_name": raw_name,
                 "count": count,
                 "asset": asset,
+                "address": address,
                 "page": page,
                 "snippet": match.group(0),
             }
@@ -176,16 +193,16 @@ def compare_branch_tables(
         return []
 
     # 行错位自检：比对前先确认「名称↔数值」没有整体错开一行。
-    # 实测光大银行 A/H 有 40/44 家的 H 侧数值等于 A 侧**另一家**分行的数值 ——
-    # 那是解析错位，不是 40 处真实不一致。错位时整表不出结论。
-    alignment = check_row_alignment(
-        {name: data["asset"] for name, data in a_branches.items()},
-        {name: data["asset"] for name, data in h_branches.items()},
-    )
+    # 判据是同行共位锚点（机构数量 + 办公地址）——
+    # 锚点跟着数值一起移动 = 抽取错位，整表不出结论；
+    # 锚点原位不动而数值跨名称命中 = 资产规模整列被打乱，那是真实差异，照常比对。
+    alignment = _branch_row_alignment(a_branches, h_branches)
     log_report(alignment, "分支机构资产规模")
     if not alignment.comparable:
         logger.warning("分支机构披露检查：{}，本表不产出差异", alignment.reason())
         return []
+    if alignment.is_column_permuted:
+        logger.info("分支机构披露检查：{}", alignment.reason())
 
     diffs: list[Diff] = []
 
@@ -324,8 +341,24 @@ def run_branch_checks(a_file: str, h_file: str) -> tuple[list[Diff], dict[str, o
     return diffs, diagnostics
 
 
+def _branch_row_alignment(a_branches: dict[str, dict], h_branches: dict[str, dict]):
+    """构造分支机构表的对齐自检报告。诊断口径与比对口径共用，避免两条路径判断不一致。"""
+    return check_row_alignment(
+        {name: data["asset"] for name, data in a_branches.items()},
+        {name: data["asset"] for name, data in h_branches.items()},
+        a_anchors={
+            name: (data.get("count"), data.get("address")) for name, data in a_branches.items()
+        },
+        h_anchors={
+            name: (data.get("count"), data.get("address")) for name, data in h_branches.items()
+        },
+    )
+
+
 def _count_branch_asset_diffs(a_branches: dict[str, dict], h_branches: dict[str, dict], matched_names: list[str]) -> int:
     if not _branch_alignment_confident(a_branches, h_branches, matched_names):
+        return 0
+    if not _branch_row_alignment(a_branches, h_branches).comparable:
         return 0
     count = 0
     for name in matched_names:

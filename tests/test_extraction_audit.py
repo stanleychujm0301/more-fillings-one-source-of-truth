@@ -309,7 +309,7 @@ def test_loaded_legacy_h_bilingual_summary_requires_rerun_not_5000_real_diffs() 
         },
     )
 
-    assert summary["result_version"] == 17
+    assert summary["result_version"] == 18
     assert summary["stale_result"] is True
     assert summary["legacy_result_sanitized"] is True
     assert summary["legacy_result_requires_rerun"] is True

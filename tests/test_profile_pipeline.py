@@ -6314,7 +6314,7 @@ def test_legacy_history_upgrade_drops_numeric_and_event_false_positives(monkeypa
         ],
     )
 
-    assert summary["result_version"] == 17
+    assert summary["result_version"] == 18
     assert summary["real_diff_count"] == 5
     assert summary["expected_diff_count"] == 1
     assert summary["unresolved_diff_count"] == 1

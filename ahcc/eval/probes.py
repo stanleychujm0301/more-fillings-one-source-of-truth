@@ -16,6 +16,18 @@
    `triage=="real" and scope==CROSS_REPORT` 的差异都是待验条目。全量条数即
    **FP 上界**；按 rule_id × triage × severity 分桶抽检，确认率给出 FP 率的
    Wilson 置信区间。
+
+「干净对」这个前提是有例外的
+----------------------------
+这 7 组并非全部干净。**光大银行不是干净对**：它的 H 侧是 2026-03-30 的 Word 稿
+（352 页），分支机构表「资产规模」整列被打乱 —— 44 行错 40 行，机构数量与办公
+地址两侧完全一致，两侧数值多重集完全相等；官方正式版 H 报告（316 页 InDesign 版）
+与 A 报告逐行一致，证明 A 侧是正确值。那 40 条是**真实差异**。
+
+把这类已核实的真差异计进 FP 上界，会让「干净对 FP=0」变成一个奖励删检出的指标 ——
+历史上正是这么把分支机构核查整个删掉的。因此 `KNOWN_TRUE_POSITIVES` 登记它们，
+从 FP 上界中扣除并单列一栏。登记只按 (样本对, rule_id) 粒度，其余 rule_id 仍照常
+计入 FP 观测。
 """
 
 from __future__ import annotations
@@ -25,7 +37,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from ahcc.schemas import Diff, DiffScope
 
@@ -143,20 +155,54 @@ def bucket_diffs(diffs: Iterable[Diff]) -> list[FpBucket]:
     return sorted(buckets.values(), key=lambda b: (-len(b.diffs), b.key))
 
 
-def fp_upper_bound(diffs: Iterable[Diff]) -> dict[str, int]:
+# 已人工核实为真的检出：(样本对 → rule_id → 说明)。这些不计入 FP 上界。
+# 只登记有原始文档证据链、结论明确的条目，见模块 docstring。
+KNOWN_TRUE_POSITIVES: dict[str, dict[str, str]] = {
+    "光大银行": {
+        "branch_asset_scale_match": (
+            "H 侧 2026-03-30 Word 稿分支机构表「资产规模」整列被打乱（44 行错 40 行）；"
+            "机构数量/办公地址两侧一致，官方正式版 H 报告与 A 逐行一致。"
+        ),
+    },
+}
+
+
+def known_true_positive_rules(pair_id: str) -> dict[str, str]:
+    """该样本对上已核实为真、不计入 FP 上界的 rule_id。"""
+    return dict(KNOWN_TRUE_POSITIVES.get(str(pair_id or "").strip(), {}))
+
+
+def fp_upper_bound(
+    diffs: Iterable[Diff],
+    *,
+    known_true_positives: Mapping[str, str] | None = None,
+) -> dict[str, int]:
     """真实 A/H 年报上的 FP 上界。
 
     同一家公司的 A 股与 H 股年报，同一指标本应一致。因此每一条被报为
     「真实的跨报告差异」都是待验条目 —— 在人工确认之前，它们的**全量条数**
     就是 FP 的上界（上界，因为其中确实可能有真差异）。
+
+    例外：`known_true_positives` 里登记的 rule_id 已有原始文档证据链佐证为真差异，
+    单独计入 `known_true_positive`，不计进 `cross_report_real`。
     """
-    counts = {"cross_report_real": 0, "cross_report_unresolved": 0, "cross_report_expected": 0, "internal": 0}
+    known = set(known_true_positives or ())
+    counts = {
+        "cross_report_real": 0,
+        "cross_report_unresolved": 0,
+        "cross_report_expected": 0,
+        "internal": 0,
+        "known_true_positive": 0,
+    }
     for d in diffs:
         scope = _scope_of(d)
         if scope != DiffScope.CROSS_REPORT.value:
             counts["internal"] += 1
             continue
         triage = _norm(getattr(d, "triage", "")) or "real"
+        if triage == "real" and (getattr(d, "rule_id", "") or "") in known:
+            counts["known_true_positive"] += 1
+            continue
         key = f"cross_report_{triage}"
         counts[key] = counts.get(key, 0) + 1
     return counts
@@ -180,6 +226,7 @@ def export_fp_workbook(
     *,
     sample_per_bucket: int = 20,
     seed: int = 0,
+    known_true_positives: Mapping[str, str] | None = None,
 ) -> dict[str, int]:
     """导出全量差异分桶 + 人工抽检工作簿。
 
@@ -189,13 +236,20 @@ def export_fp_workbook(
     - 「人工抽检」  —— 每桶随机抽 N 条，留空「是否真差异」列供人工回填
 
     回填后用 `wilson_interval` 就能给出该桶 FP 率的区间估计。
+
+    `known_true_positives` 未显式传入时按 `pair_id` 从 `KNOWN_TRUE_POSITIVES` 取。
     """
     from openpyxl import Workbook
 
     diff_list = list(diffs)
     rng = random.Random(seed)
     buckets = bucket_diffs(diff_list)
-    bounds = fp_upper_bound(diff_list)
+    known = (
+        dict(known_true_positives)
+        if known_true_positives is not None
+        else known_true_positive_rules(pair_id)
+    )
+    bounds = fp_upper_bound(diff_list, known_true_positives=known)
 
     wb = Workbook()
 
@@ -211,6 +265,10 @@ def export_fp_workbook(
     ws.append(["跨报告 · unresolved", bounds.get("cross_report_unresolved", 0), "待人工判定"])
     ws.append(["跨报告 · expected", bounds.get("cross_report_expected", 0), "系统自称可解释，需抽检确认抑制是否正确"])
     ws.append(["单侧内部差异", bounds.get("internal", 0), "报告自身不自洽，不属于跨报告 FP 口径"])
+    ws.append([
+        "已核实真差异", bounds.get("known_true_positive", 0),
+        "；".join(f"{rule}：{note}" for rule, note in known.items()) or "（无）",
+    ])
 
     ws_b = wb.create_sheet("分桶统计")
     ws_b.append(["rule_id", "triage", "severity", "scope", "条数", "抽检量"])

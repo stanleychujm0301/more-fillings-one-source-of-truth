@@ -111,6 +111,8 @@ class EvalReport:
     weak_count: int = 0
     detected_but_suppressed_count: int = 0
     visible_diff_count: int = 0
+    # 未命中清单、但已核实为样本自带的真实差异（不计入 hard FP，见 probes.KNOWN_TRUE_POSITIVES）
+    known_true_positive_count: int = 0
     recall_by_rule_id: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
@@ -530,7 +532,23 @@ def evaluate(diffs: list[Diff], expected: list[ExpectedDiff], *, pair_id: str = 
     weak_count = sum(1 for m in matches if m.match_level == "weak")
 
     # --- 误报分档：hard / soft / suppressed 三档互不混淆 ---
-    unmatched = [d for i, d in enumerate(diffs) if i not in used_diffs]
+    # 已核实为真的检出不算误报。主办方清单只覆盖植入到 A 侧的那 15 处，样本 PDF 本身
+    # 携带的真实差异（如光大银行 H 稿分支机构资产规模整列错乱）不在清单里，
+    # 若计进 hard FP，precision 就会奖励「把这些检出删掉」—— 历史上正是这么删掉的。
+    from ahcc.eval.probes import known_true_positive_rules
+
+    known_true = set(known_true_positive_rules(pair_id))
+
+    def _is_known_true(diff: Diff) -> bool:
+        return (
+            bool(known_true)
+            and _norm_enum(diff.triage) == "real"
+            and (getattr(diff, "rule_id", "") or "") in known_true
+        )
+
+    all_unmatched = [d for i, d in enumerate(diffs) if i not in used_diffs]
+    known_tp = [d for d in all_unmatched if _is_known_true(d)]
+    unmatched = [d for d in all_unmatched if not _is_known_true(d)]
     hard_fp = [d for d in unmatched if _norm_enum(d.triage) == "real"]
     soft_fp = [d for d in unmatched if _norm_enum(d.triage) == "unresolved"]
     suppressed_fp = [d for d in unmatched if _norm_enum(d.triage) == "expected"]
@@ -555,6 +573,7 @@ def evaluate(diffs: list[Diff], expected: list[ExpectedDiff], *, pair_id: str = 
         weak_count=weak_count,
         detected_but_suppressed_count=detected_but_suppressed,
         visible_diff_count=len(visible_diffs),
+        known_true_positive_count=len(known_tp),
         recall_by_rule_id=_recall_by_rule_id(matches),
     )
 
@@ -603,6 +622,7 @@ def export_eval_excel(report: EvalReport, out_path: Path) -> None:
         ("待人工确认(fuzzy)", report.needs_manual_review_count, "不计入召回"),
         ("仅命中原始值(weak)", report.weak_count, "未指认错误值，不计入召回"),
         ("hard 误报", report.hard_fp_count, "未命中且 triage=real"),
+        ("已核实真差异", report.known_true_positive_count, "不在清单内但已核实为样本自带的真实差异，不计误报"),
         ("soft 误报", report.soft_fp_count, "未命中且 triage=unresolved"),
         ("自称可解释(suppressed)", report.suppressed_count, "未命中且 triage=expected，需抽检确认抑制是否正确"),
         ("召回率", report.recall, ""),

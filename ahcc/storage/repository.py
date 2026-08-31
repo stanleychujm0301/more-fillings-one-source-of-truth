@@ -31,7 +31,7 @@ from ahcc.user_context import (
     public_user_payload,
 )
 
-_CURRENT_RESULT_VERSION = 17
+_CURRENT_RESULT_VERSION = 18
 _RUNNING_JOB_STATUSES = {
     JobStatus.PENDING.value,
     JobStatus.PARSING.value,
