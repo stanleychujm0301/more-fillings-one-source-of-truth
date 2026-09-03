@@ -14,7 +14,7 @@ from ahcc.storage.repository import _attach_current_extraction_metadata, _saniti
 
 
 def test_extraction_engine_version_marks_branch_repair_release():
-    assert EXTRACTION_ENGINE_VERSION == "2026-06-01.13"
+    assert EXTRACTION_ENGINE_VERSION == "2026-09-01.14"
 
 
 def _cached_doc(file_path: Path, marker: str = "v1") -> ReportDocument:
@@ -309,7 +309,7 @@ def test_loaded_legacy_h_bilingual_summary_requires_rerun_not_5000_real_diffs() 
         },
     )
 
-    assert summary["result_version"] == 18
+    assert summary["result_version"] == 19
     assert summary["stale_result"] is True
     assert summary["legacy_result_sanitized"] is True
     assert summary["legacy_result_requires_rerun"] is True

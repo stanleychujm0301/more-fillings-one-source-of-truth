@@ -9,9 +9,27 @@ def parse_report(file_path: str, side: ReportSide) -> ReportDocument:
     suffix = Path(file_path).suffix.lower()
     if side == ReportSide.A_SHARE:
         from ahcc.parser.pdf_a import parse_a_pdf
-        return parse_a_pdf(file_path)
-    if suffix in {".html", ".htm"}:
+        doc = parse_a_pdf(file_path)
+    elif suffix in {".html", ".htm"}:
         from ahcc.parser.pdf_h_html import parse_h_html
-        return parse_h_html(file_path)
-    from ahcc.parser.pdf_h_html import parse_h_pdf
-    return parse_h_pdf(file_path)
+        doc = parse_h_html(file_path)
+    else:
+        from ahcc.parser.pdf_h_html import parse_h_pdf
+        doc = parse_h_pdf(file_path)
+    _annotate_tables(doc)
+    return doc
+
+
+def _annotate_tables(doc: ReportDocument) -> None:
+    """列头注解：为每张表构建列坐标系（column_headers/header_row_indices/period）。
+
+    放在 parse_report 出口统一做 —— H 股解析缓存在 parse_h_pdf 内部，
+    缓存命中与新鲜解析都会经过这里，无需 bump 缓存版本即可获得列头。
+    """
+    from ahcc.table import annotate_table
+
+    for table in doc.tables:
+        try:
+            annotate_table(table)
+        except Exception:  # noqa: BLE001 — 单表注解失败不阻断解析
+            continue

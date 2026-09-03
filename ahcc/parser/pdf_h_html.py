@@ -25,7 +25,7 @@ from ahcc.parser.table_extract import (
     merge_tables,
 )
 
-H_PDF_CACHE_VERSION = "h_pdf_v3"
+H_PDF_CACHE_VERSION = "h_pdf_v4"
 
 # 解析心跳回调：长页循环（尤其乱码页 OCR 兜底）每页触发一次，供 worker 子进程刷新
 # heartbeat 文件，避免"预算内但慢"的解析被父进程误判为卡死。inline 模式保持 None。

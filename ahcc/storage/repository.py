@@ -31,7 +31,7 @@ from ahcc.user_context import (
     public_user_payload,
 )
 
-_CURRENT_RESULT_VERSION = 18
+_CURRENT_RESULT_VERSION = 19
 _RUNNING_JOB_STATUSES = {
     JobStatus.PENDING.value,
     JobStatus.PARSING.value,
@@ -575,6 +575,22 @@ def _metric_from_snapshot(raw: dict, fallback_key: str, fallback_name: Localized
     source = raw.get("source") or "text"
     if source not in {"table", "text", "generic_pattern"}:
         source = "text"
+    column_key_raw = raw.get("column_key")
+    column_key = None
+    if isinstance(column_key_raw, dict):
+        try:
+            from ahcc.schemas import ColumnKey
+
+            column_key = ColumnKey.model_validate(column_key_raw)
+        except Exception:
+            column_key = None
+    cell_ref_raw = raw.get("cell_ref")
+    cell_ref = None
+    if isinstance(cell_ref_raw, (list, tuple)) and len(cell_ref_raw) == 2:
+        try:
+            cell_ref = (int(cell_ref_raw[0]), int(cell_ref_raw[1]))
+        except (TypeError, ValueError):
+            cell_ref = None
     return MetricItem(
         canonical_key=raw.get("canonical_key") or fallback_key,
         name=_localized_name(raw.get("name"), fallback_name.best()),
@@ -587,6 +603,11 @@ def _metric_from_snapshot(raw: dict, fallback_key: str, fallback_name: Localized
         evidence=evidence,
         confidence=float(raw.get("confidence") or 0.0),
         source=source,
+        column_key=column_key,
+        column_header=raw.get("column_header"),
+        row_label=raw.get("row_label"),
+        table_id=raw.get("table_id"),
+        cell_ref=cell_ref,
     )
 
 

@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from ahcc.schemas import (
+    ColumnKey,
     Currency,
     DiffSeverity,
     Evidence,
@@ -39,6 +40,13 @@ class MetricItem(BaseModel):
     binding_strength: int = 30
     # glossary 命中方式：exact/alias 可参与真实差异判定，fuzzy（子串兜底）只能做参考。
     match_mode: Literal["exact", "alias", "fuzzy", "none"] = "exact"
+
+    # —— 行×列二维坐标（结构化，取代 snippet 字符串「走私」）——
+    column_key: Optional[ColumnKey] = Field(None, description="来源列的列键（横坐标）")
+    column_header: Optional[str] = Field(None, description="来源列头文本（多级拼接）")
+    row_label: Optional[str] = Field(None, description="来源行标签（纵坐标，归一化前原文）")
+    table_id: Optional[str] = Field(None, description="来源表格 id")
+    cell_ref: Optional[tuple[int, int]] = Field(None, description="来源单元格 (row, col)")
 
 
 class InternalInconsistency(BaseModel):

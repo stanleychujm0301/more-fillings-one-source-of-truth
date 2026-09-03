@@ -86,6 +86,19 @@ class Settings(BaseSettings):
     numeric_llm_review_min_confidence: float = 0.80
     event_use_llm_semantic_review: bool = True
     event_llm_review_min_confidence: float = 0.80
+
+    # —— 表格列坐标系升级（2026-09）—— 全部可单独关闭以回退到旧行为。
+    # fast_path_header_rows：A 股快速路径（文本层重建表格）保留表头行（旧版整行丢弃）。
+    fast_path_header_rows: bool = True
+    # column_key_hard_gate：数值配对前的列键硬门槛（pairable：期间到月日/值种类/口径
+    # 都识别且不同 → 拒绝配对）。False 时降级为打分项，恢复旧的宽松配对。
+    column_key_hard_gate: bool = True
+    # internal_substring_label_guard：单报告内部一致性中，行标签一方为另一方真子串
+    # （如「负债合计」⊂「未折现租赁负债合计」）或 fuzzy 命中时不判可比。
+    internal_substring_label_guard: bool = True
+    # key_metric_llm_review_max_calls：高危精确差异的强制 LLM 列口径核验预算
+    # （DeepSeek 并发 ≤3，磁盘缓存兜底；0 = 关闭强制核验）。
+    key_metric_llm_review_max_calls: int = 8
     # 取数精度护栏（Phase 1）。全部可单独关闭以回退到旧行为。
     # strict_binding：未命中术语表的标签不再造 canonical_key；同一 (页,值) 只归属一个科目。
     extraction_strict_binding: bool = True

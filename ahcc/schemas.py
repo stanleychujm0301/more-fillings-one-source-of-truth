@@ -60,6 +60,81 @@ class Evidence(BaseModel):
     )
     snippet: str = Field(..., description="原文片段（≤200 字），UI 直接显示")
     section: Optional[str] = Field(None, description="所属章节，如 '合并资产负债表'")
+    table_id: Optional[str] = Field(None, description="来源表格 id，如 'A_p045_t01'")
+    cell_ref: Optional[tuple[int, int]] = Field(None, description="来源单元格 (row, col)，0-based")
+
+
+# ============================================================
+# 表格坐标系 — 列维度（横坐标表头）的结构化表示
+# ============================================================
+
+class ValueKind(str, Enum):
+    """列的值种类 — 该列的数字在语义上是什么（金额还是占比/变动/附注号）。"""
+
+    MAIN = "main_value"            # 金额/余额/发生额（默认，兼容旧 role "main_value"）
+    CHANGE_PCT = "change_pct"      # 增减(%) / 同比增减 / 变动%
+    CHANGE_AMOUNT = "change_amount"  # 增减额 / 变动额 / 调整金额
+    RATIO = "ratio"                # 占比 / 比例 / % of total
+    POINTS = "points"              # 百分点（叙述里的「上升1.53个百分点」）
+    NOTE_REF = "note_reference"    # 附注号
+    EXCHANGE_RATE = "exchange_rate"  # 折算汇率 / 外币折算
+
+
+class ColumnKey(BaseModel):
+    """列键 — 一个数值单元格在横坐标（列）上的结构化定位。
+
+    解析不出来的字段一律 None（宽松）：列键明确才硬否决配对，
+    列键缺失永远宽松回退，绝不因信息缺失而漏检。
+    """
+
+    period: Optional[str] = Field(None, description="期间，精确到月日，如 '2025-12-31'；仅年份时为 '2025'")
+    period_role: Optional[Literal["current", "prior"]] = Field(
+        None, description="相对期间：本期/上期（current year/prior year）。锚定失败时不猜绝对年份"
+    )
+    scope: Optional[Literal["consolidated", "parent", "segment"]] = Field(
+        None, description="口径：合并/本集团、母公司、分部"
+    )
+    kind: ValueKind = ValueKind.MAIN
+    unit_hint: Optional[str] = Field(None, description="列头/表级单位线索，如 '人民币百万元'")
+    raw_header: str = Field("", description="归一化前的原始列头文本")
+
+    def display(self) -> str:
+        """人类可读的列口径描述，用于 snippet/报告/UI。"""
+        parts: list[str] = []
+        if self.period:
+            parts.append(self.period)
+        elif self.period_role:
+            parts.append("本期" if self.period_role == "current" else "上期")
+        if self.scope:
+            parts.append({"consolidated": "合并", "parent": "母公司", "segment": "分部"}[self.scope])
+        if self.kind != ValueKind.MAIN:
+            parts.append(
+                {
+                    ValueKind.CHANGE_PCT: "增减%",
+                    ValueKind.CHANGE_AMOUNT: "增减额",
+                    ValueKind.RATIO: "占比",
+                    ValueKind.POINTS: "百分点",
+                    ValueKind.NOTE_REF: "附注号",
+                    ValueKind.EXCHANGE_RATE: "汇率",
+                }[self.kind]
+            )
+        if self.unit_hint:
+            parts.append(self.unit_hint)
+        return "·".join(parts) if parts else self.raw_header
+
+    def is_precise_period(self) -> bool:
+        """期间是否精确到月日/季度（可用于硬比较）。"""
+        return bool(self.period) and len(str(self.period)) > 4
+
+
+class ColumnHeader(BaseModel):
+    """单列的表头结构（支持两级表头）。"""
+
+    col: int
+    level0_text: Optional[str] = Field(None, description="顶层表头（如 '2025年'），无多级时与 merged_text 一致")
+    level1_text: Optional[str] = Field(None, description="次级表头（如 '金额'/'占比'）")
+    merged_text: str = Field("", description="多级拼接后的完整列头文本")
+    column_key: Optional[ColumnKey] = Field(None, description="归一化后的列键")
 
 
 # ============================================================
@@ -71,6 +146,9 @@ class TableCell(BaseModel):
     col: int
     text: str
     is_header: bool = False
+    bbox: Optional[tuple[float, float, float, float]] = Field(
+        None, description="单元格坐标（左上x0,y0 右下x1,y1），解析引擎可得时填充"
+    )
 
 
 class FinancialTable(BaseModel):
@@ -84,6 +162,8 @@ class FinancialTable(BaseModel):
     unit: Optional[str] = Field(None, description="例 '人民币百万元'")
     period: Optional[str] = Field(None, description="例 '2024-12-31'")
     section: Optional[str] = Field(None, description="所属核心章节，如 'bs', 'pl', 'cf', 'equity'")
+    column_headers: list[ColumnHeader] = Field(default_factory=list, description="各列的结构化表头")
+    header_row_indices: list[int] = Field(default_factory=list, description="检测出的表头行号（0-based）")
 
 
 class TextSegment(BaseModel):
@@ -149,6 +229,8 @@ class DataPoint(BaseModel):
     unit: Optional[str] = None
     currency: Optional[Currency] = None
     period: Optional[str] = None
+    column_key: Optional[ColumnKey] = Field(None, description="来源列的列键（横坐标定位）")
+    row_label: Optional[str] = Field(None, description="来源行标签（纵坐标定位）")
     evidence: Evidence
     confidence: float = Field(1.0, ge=0.0, le=1.0)
 
@@ -266,6 +348,10 @@ class Diff(BaseModel):
 
     # 证据链
     evidence: list[Evidence] = []
+
+    # 结构性分组（如「整列错乱」）：同组明细不删，仅折叠呈现
+    structural_group_id: Optional[str] = Field(None, description="所属结构性分组 id")
+    is_structural_detail: bool = Field(False, description="是否为结构性分组的行级明细")
 
     # 准则推理（仅 DiffType.STANDARD/DISCLOSURE）
     standard_reasoning: Optional[StandardReasoning] = None
