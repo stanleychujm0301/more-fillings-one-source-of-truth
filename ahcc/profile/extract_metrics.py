@@ -19,7 +19,23 @@ from ahcc.align.glossary import glossary, to_simplified
 from ahcc.config import settings
 from ahcc.parser.audit import add_audit_warning
 from ahcc.profile.models import MetricItem
-from ahcc.schemas import Currency, Evidence, FinancialTable, LocalizedString, ReportDocument, ReportSide, TextSegment
+from ahcc.schemas import (
+    ColumnKey,
+    Currency,
+    Evidence,
+    FinancialTable,
+    LocalizedString,
+    ReportDocument,
+    ReportSide,
+    TextSegment,
+    ValueKind,
+)
+from ahcc.table import (
+    compat as table_compat,
+    grid_for,
+    header_text_for_column as _grid_header_text_for_column,
+    narrative_value_kind,
+)
 
 
 # ============================================================
@@ -48,6 +64,9 @@ def _parse_number(text: str) -> Optional[float]:
     elif text.startswith("（") and text.endswith("）"):
         is_negative = True
         text = text[1:-1]
+    elif text.startswith("+"):
+        # 带正号的增减列值（"+0.02"）
+        text = text[1:]
 
     cleaned = text.replace(",", "").replace(" ", "").replace("'", "")
     match = _NUMBER_RE.match(cleaned)
@@ -376,12 +395,13 @@ def _year_from_text(text: str | None) -> str | None:
 
 
 def _header_text_for_column(rows: dict[int, list], row_idx: int, col: int) -> str:
-    parts: list[str] = []
-    for header_row in sorted(r for r in rows if r < row_idx):
-        for cell in sorted(rows[header_row], key=lambda c: c.col):
-            if cell.col == col and cell.text.strip():
-                parts.append(cell.text.strip())
-    return " ".join(parts)
+    """指定列的列头文本（兼容旧签名，table_row_twin 等仍在用）。
+
+    旧实现把当前行之上的**所有行**（含数据行）拼进列头 —— 数据行数值污染
+    列头（snippet 里 "· 2025 2024 126,311 49,687…"）。现委托 ahcc.table：
+    只拼检测出的表头行。
+    """
+    return _grid_header_text_for_column(rows, row_idx, col)
 
 
 def _period_for_table_cell(table: FinancialTable, header_text: str) -> str | None:
@@ -529,10 +549,28 @@ def _extract_from_table_legacy(
     return items
 
 
+def _cell_value_column_key(base: ColumnKey | None, value_text: str | None) -> ColumnKey | None:
+    """单元格值对列键的值种类修正：值文本自带「个百分点」后缀 → POINTS。
+
+    「-0.06个百分点」这类增减列的值即使列头没识别出 kind，值文本也能自证。
+    item 照常产出（不删检出），仅打 kind 标记。
+    """
+    if value_text and ("个百分点" in value_text or "個百分點" in value_text or "percentage point" in value_text.lower()):
+        if base is None:
+            return ColumnKey(kind=ValueKind.POINTS, raw_header="")
+        if base.kind == ValueKind.MAIN:
+            return base.model_copy(update={"kind": ValueKind.POINTS})
+    return base
+
+
 def _extract_from_table(
     table: FinancialTable, side: ReportSide, unmapped: Optional[list[dict]] = None
 ) -> list[MetricItem]:
-    """Extract table metrics with column-level period context preserved."""
+    """Extract table metrics with column-level period context preserved.
+
+    行×列二维坐标：每个数值单元格携带 (行标签, 列键) 结构化定位 —— 列键含
+    期间(到月日)/口径/值种类/单位，取代旧版靠 snippet 字符串「走私」列头。
+    """
     items: list[MetricItem] = []
     if not table.cells:
         return items
@@ -540,6 +578,9 @@ def _extract_from_table(
     rows: dict[int, list] = {}
     for cell in table.cells:
         rows.setdefault(cell.row, []).append(cell)
+
+    grid = grid_for(table)
+    table_title = table.title.zh or table.title.en
 
     prev_key: Optional[str] = None
     prev_label = ""
@@ -556,7 +597,15 @@ def _extract_from_table(
         row_idx: int,
         name: LocalizedString | None = None,
     ) -> None:
-        header_text = _header_text_for_column(rows, row_idx, cell_col)
+        header = grid.header_for(cell_col)
+        header_text = header.merged_text if header else ""
+        base_key = header.column_key if header else None
+        column_key = _cell_value_column_key(base_key, value_text)
+        period = None
+        if column_key is not None:
+            period = column_key.period
+        if not period:
+            period = _period_for_table_cell(table, header_text)
         resolved_name = name or LocalizedString(zh=label_text, en=label_text)
         items.append(
             MetricItem(
@@ -566,19 +615,26 @@ def _extract_from_table(
                 value_text=value_text,
                 unit=table.unit,
                 currency=table.currency,
-                period=_period_for_table_cell(table, header_text),
+                period=period,
                 page=table.page,
                 evidence=Evidence(
                     side=side,
                     page=table.page,
                     bbox=table.bbox,
                     snippet=_table_snippet(label_text, value_text, header_text),
-                    section=table.title.zh or table.title.en,
+                    section=table_title,
+                    table_id=table.table_id,
+                    cell_ref=(row_idx, cell_col),
                 ),
                 confidence=confidence,
                 source=source,  # type: ignore[arg-type]
                 binding_strength=BINDING_TABLE if source == "table" else BINDING_GLOSSARY_WINDOW,
                 match_mode="exact",
+                column_key=column_key,
+                column_header=header_text or None,
+                row_label=label_text,
+                table_id=table.table_id,
+                cell_ref=(row_idx, cell_col),
             )
         )
 
@@ -1128,6 +1184,20 @@ def _number_text_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left_digits, right_digits).ratio()
 
 
+def _narrative_value_column_key(text: str, match_end: int, label: str) -> ColumnKey | None:
+    """叙述值的值种类标记：值后紧跟「个百分点」→ POINTS；标签含同比增减 → CHANGE_PCT。
+
+    实例 6：「利息净收入…同比上升1.53个百分点」—— 1.53 是百分点变动而非金额，
+    与 H 侧金额值配对产生假差异。item 照常产出（不删检出），仅打 kind 标记，
+    由配对侧的列键比较（compat.pairable）决定不与金额值配对。
+    """
+    tail = text[match_end : match_end + 12] if match_end <= len(text) else ""
+    kind = narrative_value_kind(f"{label}{tail}")
+    if kind == ValueKind.MAIN:
+        return None
+    return ColumnKey(kind=kind, raw_header=label[:40])
+
+
 def _extract_from_text(
     seg: TextSegment,
     side: ReportSide,
@@ -1209,6 +1279,7 @@ def _extract_from_text(
                 source="text" if conf >= 0.75 else "generic_pattern",
                 binding_strength=BINDING_LABELED_INLINE,
                 match_mode="exact",
+                column_key=_narrative_value_column_key(text, match.end(), f"{label}{unit_suffix}"),
             )
         )
 
@@ -1271,6 +1342,7 @@ def _extract_from_text(
                 source="text" if conf >= 0.75 else "generic_pattern",
                 binding_strength=BINDING_LABELED_INLINE,
                 match_mode="exact",
+                column_key=_narrative_value_column_key(text, match.end(), f"{label}{unit_suffix}"),
             )
         )
 
@@ -1419,11 +1491,36 @@ def _internal_evidence_allows_consistency(key: str, item: MetricItem) -> bool:
     return True
 
 
+def _normalized_internal_label(item: MetricItem) -> str:
+    """内部一致性用的行标签归一化（简体 + 去空白/序号/脚注标记）。"""
+    raw = item.row_label or (item.name.zh or item.name.en or "")
+    simplified = to_simplified(raw)
+    return re.sub(r"^[\s\d\-–—.＊*（(]+|[\s）)]+$", "", simplified).strip()
+
+
 def _internal_metric_pair_comparable(key: str, a: MetricItem, b: MetricItem) -> bool:
     if a.value is None or b.value is None:
         return False
-    if a.period and b.period and a.period != b.period:
+    # 列键比较：期间到月日/值种类/口径都识别且不同 → 不可比（列键缺失宽松）。
+    # 实例 3：0.58（金额列）vs 7.94（「2025年比2024年增减(%)」列）kind 不同。
+    if not table_compat.pairable(a.column_key, b.column_key):
         return False
+    if a.period and b.period:
+        # 期间粒度混用（年 vs 到月日）时按宽松规则比年份，不制造假不一致
+        a_period = (a.column_key.period if a.column_key else None) or a.period
+        b_period = (b.column_key.period if b.column_key else None) or b.period
+        if not table_compat.periods_pairable(a_period, b_period):
+            return False
+    # 行标签子串防护（实例 4）：「负债合计」⊂「未折现租赁负债合计」是不同科目，
+    # 子串命中（glossary fuzzy）不该让两个口径互相比较；fuzzy 命中同理只做参考。
+    if getattr(settings, "internal_substring_label_guard", True):
+        if a.match_mode == "fuzzy" or b.match_mode == "fuzzy":
+            return False
+        a_label = _normalized_internal_label(a)
+        b_label = _normalized_internal_label(b)
+        if a_label and b_label and a_label != b_label:
+            if a_label in b_label or b_label in a_label:
+                return False
     a_role = _internal_value_role(a)
     b_role = _internal_value_role(b)
     if a_role != b_role:

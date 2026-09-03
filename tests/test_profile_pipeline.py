@@ -879,9 +879,14 @@ def test_extract_metrics_preserves_quarter_column_context() -> None:
     revenue = next(occ for occ in metrics if occ.canonical_key == "revenue")
     periods = {item.period for item in revenue.all_occurrences}
     snippets = [item.evidence.snippet for item in revenue.all_occurrences]
-    assert {"2025-Q1", "2025-Q2", "2025-Q3", "2025-Q4"} <= periods
+    # 季度列头映射到期末日（Q1→03-31），锚定年取自 table.period —— 期间粒度
+    # 从「2025-Q1」升级为到月日，供列键硬比较使用
+    assert {"2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"} <= periods
     assert any("一季度" in snippet and "33,086" in snippet for snippet in snippets)
     assert any("四季度" in snippet and "32,041" in snippet for snippet in snippets)
+    # 列键结构化字段随行携带（横坐标定位）
+    assert all(item.column_key is not None for item in revenue.all_occurrences)
+    assert all(item.row_label == "营业收入" for item in revenue.all_occurrences)
 
 
 def test_narratives_preserve_uncategorized_segments() -> None:

@@ -202,6 +202,20 @@ def annotate_table(table: FinancialTable, label_col: int | None = None) -> Table
     return grid
 
 
+def grid_for(table: FinancialTable, label_col: int | None = None) -> TableGrid:
+    """取表的列坐标系：优先用已注解的列头（parse_report 出口统一注解），
+    未注解（测试 fixture / 旧缓存）时现场构建。"""
+    if table.column_headers or table.header_row_indices:
+        return TableGrid(
+            table_id=table.table_id,
+            header_row_indices=table.header_row_indices,
+            columns=table.column_headers,
+            period=table.period,
+            label_col=label_col,
+        )
+    return build_grid(table, label_col=label_col)
+
+
 def header_text_for_column(
     rows: dict[int, list[TableCell]],
     row_idx: int,

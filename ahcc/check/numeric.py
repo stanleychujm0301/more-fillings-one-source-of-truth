@@ -25,6 +25,7 @@ from loguru import logger
 
 from ahcc.config import settings
 from ahcc.llm.client import cached_call
+from ahcc.table import compat as table_compat
 from ahcc.schemas import (
     AlignedPair,
     DataPoint,
@@ -491,6 +492,12 @@ def _metric_llm_payload(item: MetricItem, norm_value: float) -> dict[str, Any]:
         "section": evidence.section if evidence else None,
         "snippet": (evidence.snippet if evidence else "")[:500],
         "source": item.source,
+        # 行×列二维坐标（prompt 已要求参考 table row/column context）
+        "row_label": item.row_label,
+        "column_header": item.column_header,
+        "column_key": (
+            item.column_key.model_dump(exclude_none=True) if item.column_key else None
+        ),
     }
 
 
@@ -734,6 +741,13 @@ def _score_candidate_pair(key: str, a_item: MetricItem, h_item: MetricItem, curr
     a_norm = _normalized_metric_value(a_item)
     h_norm = _normalized_metric_value(h_item)
     if a_norm is None or h_norm is None:
+        return None
+
+    # 列键硬门槛：期间到月日/值种类/口径都识别且不同 → 候选根本不进打分
+    # （列键缺失永远宽松 —— _period_score 的 0.8 软分只留给列键缺失场景）。
+    if getattr(settings, "column_key_hard_gate", True) and not table_compat.pairable(
+        a_item.column_key, h_item.column_key
+    ):
         return None
 
     direct_ratio = _relative_delta(a_norm, h_norm)

@@ -18,6 +18,7 @@ from ahcc.check.explanation import make_value_explanation
 from ahcc.llm.client import cached_call
 from ahcc.profile.models import MetricItem, MetricOccurrences, ReportProfile
 from ahcc.schemas import Diff, DiffScope, DiffSeverity, DiffType, Evidence, LocalizedString, ReportSide
+from ahcc.table import compat
 
 
 KEY_METRIC_TAMPER_KEYS = {
@@ -154,6 +155,7 @@ def run_key_metric_tamper_checks(
 
     started = time.perf_counter()
     status = _new_visual_ocr_status(visual_review_mode)
+    reset_llm_review_budget()
     try:
         text_a = _front_key_metric_items(profile_a)
         text_h = _front_key_metric_items(profile_h)
@@ -1054,14 +1056,55 @@ def _exact_cross_report_mismatches(
                 candidate = _exact_mismatch_candidate(key, a_item, h_item)
                 if candidate is not None:
                     candidates.append(candidate)
+        if not candidates:
+            continue
         candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        # 同 key 存在「列键兼容且值精确相等」的 A×H 配对时，值不等的候选是
+        # 同报告多口径重述（A 附注页 vs 主表，实例 5）→ 降级 LOW/unresolved
+        # 留痕（不删除），注明已对平的精确匹配位置。
+        exact_pair = _exact_reconciled_pair(a_by_key[key], h_by_key[key])
         for ratio, _a_page, _h_page, a_item, h_item, a_value, h_value, delta in candidates[:MAX_EXACT_DIFFS_PER_KEY]:
-            llm_reason = _llm_exact_downgrade_reason(key, a_item, h_item, a_value, h_value)
+            severity = DiffSeverity.MEDIUM if ratio <= 0.005 else DiffSeverity.HIGH
+            if exact_pair is not None:
+                a_match, h_match = exact_pair
+                label = _label_for(a_item, h_item)
+                diffs.append(
+                    Diff(
+                        diff_id=f"EXACT_{key}_{uuid.uuid4().hex[:6]}",
+                        diff_type=DiffType.NUMERIC,
+                        diff_scope=DiffScope.CROSS_REPORT,
+                        severity=DiffSeverity.LOW,
+                        triage="unresolved",
+                        canonical_key=key,
+                        topic=LocalizedString(zh=f"关键指标口径重述差异：{label}", en=f"Key metric restatement mismatch: {label}"),
+                        summary=LocalizedString(
+                            zh=(
+                                f"{label}: A股 {a_value:,.2f} vs H股 {h_value:,.2f}，但该指标已存在"
+                                f"列口径一致的精确匹配（A股第{a_match.page or '?'}页 vs H股第{h_match.page or '?'}页）——"
+                                f"本条疑为附注页/其他口径重述，请确认两侧报告口径"
+                            ),
+                            en=(
+                                f"{label}: A={a_value:,.2f} vs H={h_value:,.2f}, but an exact match "
+                                f"with same column context exists (A p{a_match.page or '?'} vs H p{h_match.page or '?'}) — "
+                                f"likely a notes-page restatement under a different scope"
+                            ),
+                        ),
+                        a_value=a_value,
+                        h_value=h_value,
+                        delta=delta,
+                        tolerance=0.0,
+                        evidence=[a_item.evidence, h_item.evidence],
+                        rule_id="key_metric_exact_mismatch",
+                    )
+                )
+                continue
+            llm_reason = _llm_exact_downgrade_reason(
+                key, a_item, h_item, a_value, h_value, force_review=severity == DiffSeverity.HIGH
+            )
             if llm_reason:
                 diffs.append(_make_llm_review_diff(key, a_item, h_item, a_value, h_value, llm_reason))
                 continue
             label = _label_for(a_item, h_item)
-            severity = DiffSeverity.MEDIUM if ratio <= 0.005 else DiffSeverity.HIGH
             diffs.append(
                 Diff(
                     diff_id=f"EXACT_{key}_{uuid.uuid4().hex[:6]}",
@@ -1086,6 +1129,29 @@ def _exact_cross_report_mismatches(
     return diffs
 
 
+def _exact_reconciled_pair(
+    a_items: list[MetricItem], h_items: list[MetricItem]
+) -> tuple[MetricItem, MetricItem] | None:
+    """找一对「角色/口径/期间/列键兼容且值精确相等」的 A×H 出现点。"""
+    for a_item in a_items:
+        for h_item in h_items:
+            if not _same_metric_value_role(a_item, h_item):
+                continue
+            if not _same_reporting_scope(a_item, h_item):
+                continue
+            if not _periods_compatible(a_item, h_item):
+                continue
+            if not compat.pairable(a_item.column_key, h_item.column_key):
+                continue
+            a_value = _normalized_value(a_item)
+            h_value = _normalized_value(h_item)
+            if a_value is None or h_value is None:
+                continue
+            if _same_value(a_value, h_value):
+                return (a_item, h_item)
+    return None
+
+
 def _items_by_key(items: list[MetricItem]) -> dict[str, list[MetricItem]]:
     grouped: dict[str, list[MetricItem]] = {}
     for item in items:
@@ -1105,6 +1171,14 @@ def _exact_mismatch_candidate(
     if not _same_metric_value_role(a_item, h_item):
         return None
     if not _same_reporting_scope(a_item, h_item):
+        return None
+    # 列键硬门槛：期间到月日/值种类/口径都识别且不同 → 不是可比对（列键缺失
+    # 永远宽松）。流动性覆盖率 Q4 列 vs Q2 列、EPS 金额 vs 增减% 在此拦截。
+    if getattr(settings, "column_key_hard_gate", True) and not compat.pairable(
+        a_item.column_key, h_item.column_key
+    ):
+        return None
+    if not _periods_compatible(a_item, h_item):
         return None
     if _same_value(a_value, h_value):
         return None
@@ -1140,6 +1214,10 @@ def _same_metric_value_role(a_item: MetricItem, h_item: MetricItem) -> bool:
 
 
 def _metric_value_role(item: MetricItem) -> str:
+    # \u5148\u8bfb\u7ed3\u6784\u5316\u5217\u952e\uff08Phase 0 \u8d77\u968f MetricItem \u643a\u5e26\uff09\uff0c\u7f3a\u5931\u65f6\u56de\u9000\u65e7 snippet \u6b63\u5219
+    legacy_role = compat.legacy_role_name(item.column_key)
+    if legacy_role is not None:
+        return legacy_role
     header = _metric_value_header_text(item).lower()
     compact = re.sub(r"\s+", "", header)
 
@@ -1160,6 +1238,9 @@ def _metric_value_role(item: MetricItem) -> str:
 
 
 def _metric_value_header_text(item: MetricItem) -> str:
+    # \u7ed3\u6784\u5316\u5217\u5934\u4f18\u5148\uff08snippet \u6b63\u5219\u964d\u7ea7\u4e3a\u56de\u9000\u8def\u5f84\uff09
+    if item.column_header:
+        return item.column_header
     evidence = item.evidence
     snippet = evidence.snippet if evidence else ""
     match = re.search(r"\[[^\]]*?\s*\u00b7\s*([^\]]+)\]", snippet)
@@ -1170,7 +1251,7 @@ def _metric_value_header_text(item: MetricItem) -> str:
 
 def _metric_review_payload(item: MetricItem, normalized_value: float) -> dict:
     evidence = item.evidence
-    return {
+    payload = {
         "canonical_key": item.canonical_key,
         "label_zh": item.name.zh,
         "label_en": item.name.en,
@@ -1183,7 +1264,16 @@ def _metric_review_payload(item: MetricItem, normalized_value: float) -> dict:
         "section": evidence.section if evidence else None,
         "snippet": (evidence.snippet if evidence else "")[:500],
         "source": item.source,
+        # 行×列二维坐标（prompt 一直要求参考 table row/column context，
+        # 旧 payload 缺这些字段 —— 模型只能从 snippet 猜）
+        "row_label": item.row_label,
+        "column_header": item.column_header,
+        "column_key": (
+            item.column_key.model_dump(exclude_none=True) if item.column_key else None
+        ),
+        "table_id": item.table_id,
     }
+    return payload
 
 
 def _needs_llm_scope_review(a_item: MetricItem, h_item: MetricItem) -> bool:
@@ -1194,11 +1284,36 @@ def _needs_llm_scope_review(a_item: MetricItem, h_item: MetricItem) -> bool:
             "经营指标",
             "主要财务指标",
             "财务指标",
+            "主要会计数据",
+            "财务摘要",
+            "摘要",
+            "季度",
+            "监管指标",
+            "资本充足",
+            "流动性",
+            "杠杆率",
             "operating indicator",
             "financial indicator",
             "key financial data",
+            "supervisory",
+            "capital adequacy",
+            "liquidity",
+            "quarter",
+            "q1",
+            "q2",
+            "q3",
+            "q4",
         ),
     )
+
+
+# 高危 EXACT 强制 LLM 核验预算（DeepSeek 并发 ≤3，磁盘缓存兜底）
+_LLM_REVIEW_CALLS_MADE = {"count": 0}
+
+
+def reset_llm_review_budget() -> None:
+    """每个 job 运行开始时重置强制核验预算（worker 子进程内单 job 生命周期）。"""
+    _LLM_REVIEW_CALLS_MADE["count"] = 0
 
 
 def _llm_exact_downgrade_reason(
@@ -1207,13 +1322,27 @@ def _llm_exact_downgrade_reason(
     h_item: MetricItem,
     a_value: float,
     h_value: float,
+    force_review: bool = False,
 ) -> str | None:
-    if not _needs_llm_scope_review(a_item, h_item):
+    # 高危且列键信息不完整（无法从结构化列键证明可比性）→ 强制核验，
+    # 绕过词表（e5a15ac1：A 侧 fast-path 证据全不命中旧词表 → LLM 从未被调用）
+    if force_review:
+        a_informative = compat.is_column_key_informative(a_item.column_key)
+        h_informative = compat.is_column_key_informative(h_item.column_key)
+        if a_informative and h_informative:
+            force_review = False  # 列键完备，结构化门槛已判定可比性
+        elif _LLM_REVIEW_CALLS_MADE["count"] >= max(
+            0, int(getattr(settings, "key_metric_llm_review_max_calls", 8))
+        ):
+            force_review = False  # 预算耗尽，退回词表路径
+    if not force_review and not _needs_llm_scope_review(a_item, h_item):
         return None
     if not getattr(settings, "numeric_use_llm_semantic_review", True):
         return None
     if not (settings.deepseek_api_key or "").strip():
         return None
+    if force_review:
+        _LLM_REVIEW_CALLS_MADE["count"] += 1
 
     payload = {
         "metric": key,
@@ -1227,6 +1356,7 @@ def _llm_exact_downgrade_reason(
         "Use the page, section, period, table row/column context and snippets. "
         "Do not compare annual figures with quarterly, operating-indicator detail, segment, parent-company, "
         "fair-value, risk-exposure, shareholder, or other different-scope figures. "
+        "Do not compare values from different reporting dates (e.g. Dec 31 vs Jun 30 columns). "
         "You may only downgrade or require review; do not invent a difference. "
         "Return strict JSON: {\"comparable\":true|false,\"confidence\":0.0,\"reason\":\"short reason\",\"a_scope\":\"\",\"h_scope\":\"\"}.\n\n"
         f"Candidate:\n{json.dumps(payload, ensure_ascii=False)}"
@@ -1400,11 +1530,21 @@ def _periods_compatible(a_item: MetricItem, h_item: MetricItem) -> bool:
 
     关键场景：swap 注入把本期/上期两列互换 —— 若不查期间，A 侧 2024 值会与
     H 侧被换到 2023 列的同一个值「精确匹配」，整 key 被抑制，篡改被掩盖。
+    列键升级后期间精确到月日：都精确时必须全等（Q4 列 vs Q2 列不可比），
+    一侧年粒度/缺失时退回年份比较（宽松，绝不因信息缺失漏报）。
     """
-    a_year = _period_year(a_item.period)
-    h_year = _period_year(h_item.period)
-    if a_year and h_year:
-        return a_year == h_year
+    a_key_period = a_item.column_key.period if a_item.column_key else None
+    h_key_period = h_item.column_key.period if h_item.column_key else None
+    a_period = a_key_period or a_item.period
+    h_period = h_key_period or h_item.period
+    if not compat.periods_pairable(a_period, h_period):
+        return False
+    # 列键相对期间（本期/上期）current vs prior 不可比
+    if getattr(settings, "column_key_hard_gate", True):
+        a_role = a_item.column_key.period_role if a_item.column_key else None
+        h_role = h_item.column_key.period_role if h_item.column_key else None
+        if a_role and h_role and a_role != h_role:
+            return False
     return True
 
 
@@ -1434,7 +1574,12 @@ def _key_fully_reconciled(a_items: list[MetricItem], h_items: list[MetricItem]) 
             value = _normalized_value(item)
             if value is None:
                 continue
-            marker = (round(value, 6), _period_year(item.period))
+            # 期间标记用列键优先（到月日粒度）：同年不同季度的互换不再被
+            # 年粒度标记折叠掉（period_swap 篡改的可见性）；列键缺失退回年粒度
+            period_marker = (
+                (item.column_key.period if item.column_key else None) or item.period
+            )
+            marker = (round(value, 6), period_marker)
             if marker in seen:
                 continue
             seen.add(marker)

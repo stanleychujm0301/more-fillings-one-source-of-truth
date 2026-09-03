@@ -157,6 +157,8 @@ _FINANCIAL_PAGE_KEYWORDS = [
     "流动资产", "非流动资产", "负债", "股本", "资本公积",
     "手续费及佣金", "利息收入", "融出资金", "买入返售",
     "交易性金融资产", "代理买卖证券", "应付债券",
+    # 银行监管指标页（资本充足率/流动性覆盖率等季报表也是数值核对对象）
+    "资本充足率", "流动性覆盖率", "净稳定资金", "杠杆率", "监管指标",
 ]
 
 _A_CORE_SECTIONS = ("bs", "pl", "cf", "equity")
@@ -338,6 +340,226 @@ def _merge_page_texts(pdfplumber_text: str, pymupdf_text: str) -> str:
     return f"{left}\n\n{right}"
 
 
+# 快速路径的期间词（数字+年/月/日/季度）：这类词能被 _parse_number 解析出数字
+# （"2025年12月31日"→2025.0），但语义是列头不是数值 —— 必须先于数值判定排除。
+_FASTPATH_PERIOD_WORD_RE = re.compile(r"\d")
+_FASTPATH_PERIOD_MARK_RE = re.compile(r"年|月|日|季度|year|month|quarter|date", re.IGNORECASE)
+_FASTPATH_CJK_RE = re.compile(r"[一-龥]")
+_FASTPATH_BARE_NUMBER_RE = re.compile(r"\d{1,4}")
+# 表头行最多保留的视觉行数（两级表头 + 跨行折行 + 单位行；光大 p17 实测 3 行）
+_FASTPATH_MAX_HEADER_BANDS = 3
+
+
+def _fastpath_word_classifier():
+    """返回 (is_data_band, loose_numeric_words) 二件套。
+
+    - 严格值词：可解析为数字、不含 CJK、且非期间词（"7,165,319"）。
+    - 期间词：含数字且含年/月/日/季度（"2025年12月31日"），或裸数字紧邻
+      年/月/日开头的右邻词（A 股 PDF 常见"2025 年"被 get_text 按空格拆开）。
+    - 宽松数值词：_parse_number 可解析（含期间词与"921.01亿元"类单位内联值）。
+    数据行 = 有严格值词，或（有宽松数值词且无期间词，即单位内联值行）。
+    """
+    from ahcc.profile.extract_metrics import _parse_number  # 延迟导入，避免循环依赖
+
+    def word_text(w) -> str:
+        return str(w[4]).strip()
+
+    def _period_mask(xsorted: list) -> list[bool]:
+        mask = [False] * len(xsorted)
+        for i, w in enumerate(xsorted):
+            text = word_text(w)
+            if text and _FASTPATH_PERIOD_WORD_RE.search(text) and _FASTPATH_PERIOD_MARK_RE.search(text):
+                mask[i] = True
+            elif text and _FASTPATH_BARE_NUMBER_RE.fullmatch(text):
+                # 日期碎片："2025" + 右邻"年比2024"/"年12月31日"（间距 ≤6pt）
+                nxt = xsorted[i + 1] if i + 1 < len(xsorted) else None
+                if nxt is not None:
+                    nxt_text = word_text(nxt)
+                    if nxt_text and nxt_text[0] in "年月日" and (nxt[0] - w[2]) <= 6:
+                        mask[i] = True
+        return mask
+
+    def loose_numeric_words(band: list) -> list:
+        return [w for w in band if _parse_number(word_text(w)) is not None]
+
+    def is_data_band(band: list) -> bool:
+        xsorted = sorted(band, key=lambda w: w[0])
+        mask = _period_mask(xsorted)
+        has_period = any(mask)
+        for i, w in enumerate(xsorted):
+            text = word_text(w)
+            if (
+                not mask[i]
+                and _parse_number(text) is not None
+                and not _FASTPATH_CJK_RE.search(text)
+            ):
+                return True  # 有严格值词 → 数据行
+        loose = [w for w in xsorted if _parse_number(word_text(w)) is not None]
+        if loose:
+            # 单位内联值行（"营业收入 921.01亿元"）：有数值词但无期间词
+            return not has_period
+        return False
+
+    return is_data_band, loose_numeric_words
+
+
+def _band_y0(band: list) -> float:
+    return min(w[1] for w in band)
+
+
+# 组标签行样式：无数字且短的居中标签（"每股计（人民币元）"/"盈利能力指标（%）"）
+_GROUP_LABEL_MAX_CHARS = 30
+# 数据行内紧贴数值的单位后缀词（"-0.06 个百分点"），贴回前一个数值单元格
+_UNIT_SUFFIX_TOKENS = {
+    "个百分点", "個百分點", "百分点", "百分點", "%", "％",
+    "万元", "萬元", "亿元", "億元", "百万元", "百萬元", "千元",
+}
+
+
+def _split_table_segments(row_bands: list[list], data_bands: list[list]) -> list[dict]:
+    """把页面切成表格段：大间隙（>2.5×众数行距）或组标签行为界。
+
+    多表页（光大 p20：资本充足率/杠杆率/LCR 三表）与多节页（p17：经营业绩/
+    每股计/规模指标/盈利能力各节列几何不同）都必须切段，否则数值错误归列。
+    返回 list[dict(prefix=非数据行, data=数据行)]：
+    - prefix：上一段末行与本段首数据行之间的非数据行（组标签/注释/页眉）；
+      与前段合并建表时转为表内行，独立建表时作表头候选；
+    - 段内非组标签行（注释等）直接丢弃（与旧版只收数值行的行为一致）。
+    """
+    data_ids = {id(b) for b in data_bands}
+    ordered = sorted(row_bands, key=_band_y0)
+
+    # 众数行距（并列取最小，下限 10pt 防带内抖动）
+    data_ordered = sorted(data_bands, key=_band_y0)
+    gaps = [_band_y0(b) - _band_y0(a) for a, b in zip(data_ordered, data_ordered[1:])]
+    counts: dict[int, int] = {}
+    for g in gaps:
+        if g > 0:
+            counts[round(g)] = counts.get(round(g), 0) + 1
+    if counts:
+        max_count = max(counts.values())
+        mode_gap = max(10.0, float(min(r for r, c in counts.items() if c == max_count)))
+    else:
+        mode_gap = 20.0
+    threshold = 2.5 * mode_gap
+
+    segments: list[dict] = []
+    current_data: list[list] = []
+    current_prefix: list[list] = []
+    prev_data: list | None = None
+
+    def _close() -> None:
+        nonlocal current_data, current_prefix
+        if current_data:
+            segments.append({"prefix": current_prefix, "data": current_data})
+        current_data = []
+        current_prefix = []
+
+    for band in ordered:
+        if id(band) in data_ids:
+            if prev_data is not None and _band_y0(band) - _band_y0(prev_data) > threshold:
+                _close()
+            current_data.append(band)
+            prev_data = band
+        else:
+            text = "".join(str(w[4]).strip() for w in band)
+            is_group_label = (
+                bool(current_data)
+                and not any(ch.isdigit() for ch in text)
+                and 0 < len(text) <= _GROUP_LABEL_MAX_CHARS
+            )
+            if is_group_label:
+                _close()
+            if not current_data:
+                current_prefix.append(band)
+
+    _close()
+    return segments
+
+
+def _segment_col_centers(segment: dict, loose_numeric_words) -> list[float]:
+    """段内数值词的 x 中心聚类（30pt 内同列，均值更新）。"""
+    num_centers = sorted(
+        (w[0] + w[2]) / 2 for band in segment["data"] for w in loose_numeric_words(band)
+    )
+    col_centers: list[float] = []
+    for xc in num_centers:
+        if col_centers and abs(xc - col_centers[-1]) <= 30:
+            col_centers[-1] = (col_centers[-1] + xc) / 2
+        else:
+            col_centers.append(xc)
+    return col_centers
+
+
+def _geometry_matches(centers_a: list[float], centers_b: list[float], tol: float = 20.0) -> bool:
+    """两段列几何是否一致（列数相同且逐列中心偏差 ≤tol）——一致则合并回一张表。"""
+    if not centers_a or len(centers_a) != len(centers_b):
+        return False
+    return all(abs(a - b) <= tol for a, b in zip(centers_a, centers_b))
+
+
+def _collect_header_bands(
+    row_bands: list[list],
+    region: list[list],
+    col_centers: list[float],
+    min_y0: float = -1.0,
+) -> list[list]:
+    """区域首个数据行之上的紧邻表头样行（≤3 行，自上而下返回）。
+
+    min_y0：上一子表区域的末行 y0 —— 表头收集不得越过它（防把上一表的
+    数据行/表头当成下一表的表头）。防混入闸门：与下行垂直距离 ≤1.8×行距
+    （防页眉/段落）、总文本 ≤60 字、标签区右侧至少一个词对齐列中心。
+    """
+    if not region or not col_centers:
+        return []
+
+    first_data_y0 = _band_y0(region[0])
+    bands_above = [
+        b for b in row_bands if min_y0 < _band_y0(b) < first_data_y0 - 0.5
+    ]
+    if not bands_above:
+        return []
+
+    # 行距：区域内数据行间 y0 差的中位数（前 10 行），退化时用 20pt 兜底
+    data_y0s = [_band_y0(b) for b in region[:10]]
+    diffs = [b - a for a, b in zip(data_y0s, data_y0s[1:]) if b > a]
+    pitch = sorted(diffs)[len(diffs) // 2] if diffs else 20.0
+
+    min_gap = min(
+        (col_centers[i + 1] - col_centers[i] for i in range(len(col_centers) - 1)),
+        default=40.0,
+    )
+    align_tolerance = max(min_gap * 0.6, 12.0)
+    label_boundary = col_centers[0] - min_gap * 0.5
+
+    accepted: list[list] = []
+    below_y0 = first_data_y0
+    for band in reversed(bands_above):
+        if len(accepted) >= _FASTPATH_MAX_HEADER_BANDS:
+            break
+        total_text = "".join(str(w[4]).strip() for w in band)
+        if len(total_text) > 60:
+            break
+        if below_y0 - _band_y0(band) > 1.8 * pitch:
+            break  # 与表体脱节（页眉/上一段落/小节标题），不再向上找
+        # 对齐校验：标签列右侧至少一个词落在列中心附近（日期词/金额词都对齐列）；
+        # 纯标签/单位行（全在标签区）跳过校验
+        right_words = [w for w in band if (w[0] + w[2]) / 2 >= label_boundary]
+        if right_words:
+            aligned = any(
+                abs((w[0] + w[2]) / 2 - cc) <= align_tolerance
+                for w in right_words
+                for cc in col_centers
+            )
+            if not aligned:
+                break  # 段落文本按行宽排布、不对齐列 —— 不是表头
+        accepted.append(band)
+        below_y0 = _band_y0(band)
+
+    accepted.reverse()  # 自上而下
+    return accepted
+
+
 def _reconstruct_textlayer_tables(
     file_path: str, page_texts: dict[int, str]
 ) -> tuple[list[FinancialTable], set[int]]:
@@ -346,14 +568,14 @@ def _reconstruct_textlayer_tables(
     年报主表/摘要在 PDF 里是规则排布的文本网格：标签列在左、数值列在右。这里
     按 y 坐标把词聚成行、按 x 坐标把词聚成列（列中心聚类），拼出对齐的
     FinancialTable —— 供表格行孪生比对（edit/swap 检出）在 A 侧快速路径下也有
-    `doc.tables` 可用。宁缺毋滥：只有财务关键词页才重建，且每页只产一张宽表。
+    `doc.tables` 可用。每页按垂直间隙切成子表区域（多表页各表列几何不同），
+    区域内保留 ≤3 行表头（旧版整行丢弃，列键全空）。宁缺毋滥：只有财务关键词
+    页才重建。
     """
     try:
         import fitz
     except ImportError:
         return [], set()
-
-    from ahcc.profile.extract_metrics import _looks_like_label, _parse_number
 
     tables: list[FinancialTable] = []
     table_pages: set[int] = set()
@@ -389,60 +611,145 @@ def _reconstruct_textlayer_tables(
                     row_bands.append([w])
             row_bands = [sorted(b, key=lambda w: w[0]) for b in row_bands]
 
-            # 2) 只保留「至少含一个数值词」的数据行 + 紧随其上的表头行
-            data_rows = []
-            for band in row_bands:
-                if any(_parse_number(str(w[4]).strip()) is not None for w in band):
-                    data_rows.append(band)
-            if len(data_rows) < 4:
+            # 2) 数据行 = 有严格值词（无 CJK 的数字）或单位内联值行；日期词行是表头
+            is_data_band, loose_numeric_words = _fastpath_word_classifier()
+            data_bands = [band for band in row_bands if is_data_band(band)]
+            if not data_bands:
                 continue
 
-            # 3) 按 x 中心把数值词聚成列，确定列数与列中心
-            num_centers = sorted(
-                (w[0] + w[2]) / 2 for band in data_rows for w in band
-                if _parse_number(str(w[4]).strip()) is not None
-            )
-            if not num_centers:
-                continue
-            col_centers: list[float] = []
-            for xc in num_centers:
-                if col_centers and abs(xc - col_centers[-1]) <= 30:
-                    # 同一列：更新为均值
-                    col_centers[-1] = (col_centers[-1] + xc) / 2
+            # 3) 切段（大间隙/组标签），同几何段合并成组，逐组建表
+            segments = _split_table_segments(row_bands, data_bands)
+            groups: list[dict] = []
+            for segment in segments:
+                centers = _segment_col_centers(segment, loose_numeric_words)
+                if not centers:
+                    continue
+                if groups and _geometry_matches(groups[-1]["centers"], centers):
+                    groups[-1]["segments"].append(segment)
                 else:
-                    col_centers.append(xc)
-            ncols = len(col_centers)
-            if ncols < 1:
-                continue
+                    groups.append({"centers": centers, "segments": [segment]})
 
-            # 4) 逐行拼单元格：最左标签列 + 按列中心归位的数值列
-            cells: list[TableCell] = []
-            for row_idx, band in enumerate(data_rows):
-                label_words = [w for w in band if _parse_number(str(w[4]).strip()) is None]
-                number_words = [w for w in band if _parse_number(str(w[4]).strip()) is not None]
-                if label_words:
-                    label_text = "".join(str(w[4]).strip() for w in label_words if str(w[4]).strip())
-                    if label_text:
-                        cells.append(TableCell(row=row_idx, col=0, text=label_text))
-                for w in number_words:
-                    xc = (w[0] + w[2]) / 2
-                    col = 1 + min(range(ncols), key=lambda i: abs(xc - col_centers[i]))
-                    cells.append(TableCell(row=row_idx, col=col, text=str(w[4]).strip()))
+            prev_group_last_y0 = -1.0
+            for group_idx, group in enumerate(groups, start=1):
+                first_segment = group["segments"][0]
+                last_segment = group["segments"][-1]
+                group_last_y0 = _band_y0(last_segment["data"][-1])
+                col_centers = group["centers"]
+                ncols = len(col_centers)
+                if ncols < 1:
+                    prev_group_last_y0 = group_last_y0
+                    continue
 
-            if len(cells) < 8:
-                continue
+                # 表头行（从组首段数据行之上收集，不得越过上一组末行）
+                header_bands: list[list] = []
+                if getattr(settings, "fast_path_header_rows", True):
+                    header_bands = _collect_header_bands(
+                        row_bands, first_segment["data"], col_centers, min_y0=prev_group_last_y0
+                    )
 
-            tables.append(
-                FinancialTable(
-                    table_id=f"A_p{page_num:03d}_textlayer_t01",
-                    title=LocalizedString(zh=f"第{page_num}页文本层表格", en=f"p{page_num} text-layer grid"),
-                    page=page_num,
-                    bbox=(0.0, 0.0, 1.0, 1.0),
-                    cells=cells,
-                    currency=Currency.CNY,
+                # 组准入：≥2 数据行，或带表头的少行表（LCR 单行季报表）；
+                # cells ≥8 门槛兜底防噪声
+                total_data_bands = sum(len(s["data"]) for s in group["segments"])
+                if total_data_bands < 2 and not header_bands:
+                    prev_group_last_y0 = group_last_y0
+                    continue
+
+                # 4) 拼单元格：表头行在前（按列中心归位）；组内其余行按 y 序
+                #    （合并进来的组标签行也作表内行）
+                cells: list[TableCell] = []
+                min_gap = min(
+                    (col_centers[i + 1] - col_centers[i] for i in range(ncols - 1)),
+                    default=40.0,
                 )
-            )
-            table_pages.add(page_num)
+                label_boundary = col_centers[0] - min_gap * 0.5
+
+                def _col_for_xc(xc: float) -> int:
+                    return 1 + min(range(ncols), key=lambda i: abs(xc - col_centers[i]))
+
+                def _append_header_cells(band: list, row_idx: int) -> None:
+                    buckets: dict[int, list[str]] = {}
+                    for w in sorted(band, key=lambda w: w[0]):
+                        text = str(w[4]).strip()
+                        if not text:
+                            continue
+                        xc = (w[0] + w[2]) / 2
+                        col = 0 if xc < label_boundary else _col_for_xc(xc)
+                        buckets.setdefault(col, []).append(text)
+                    for col in sorted(buckets):
+                        parts = buckets[col]
+                        joined = (
+                            "".join(parts)
+                            if all(re.search(r"[一-龥]", p) for p in parts)
+                            else " ".join(parts)
+                        )
+                        cells.append(TableCell(row=row_idx, col=col, text=joined, is_header=True))
+
+                for h_idx, band in enumerate(header_bands):
+                    _append_header_cells(band, h_idx)
+
+                # 组内内容行 = 首段数据行 + 后续段的（prefix 组标签行 + 数据行），按 y 序
+                content_bands = list(first_segment["data"])
+                for segment in group["segments"][1:]:
+                    content_bands.extend(segment["prefix"])
+                    content_bands.extend(segment["data"])
+                content_bands.sort(key=_band_y0)
+
+                for d_idx, band in enumerate(content_bands, start=len(header_bands)):
+                    from ahcc.profile.extract_metrics import _parse_number  # noqa: F811 已在分类器延迟导入
+
+                    label_parts: list[str] = []
+                    last_numeric_cell: TableCell | None = None
+                    last_numeric_x1 = -1.0
+                    pending_cells: list[TableCell] = []
+                    for w in sorted(band, key=lambda w: w[0]):
+                        text = str(w[4]).strip()
+                        if not text:
+                            continue
+                        xc = (w[0] + w[2]) / 2
+                        if (
+                            _parse_number(text) is not None
+                            and not _FASTPATH_CJK_RE.search(text)
+                        ):
+                            cell = TableCell(row=d_idx, col=_col_for_xc(xc), text=text)
+                            pending_cells.append(cell)
+                            last_numeric_cell = cell
+                            last_numeric_x1 = w[2]
+                        elif xc < label_boundary:
+                            label_parts.append(text)
+                        elif (
+                            text in _UNIT_SUFFIX_TOKENS
+                            and last_numeric_cell is not None
+                            and w[0] - last_numeric_x1 <= 40
+                        ):
+                            # 单位后缀（"-0.06 个百分点"）：贴回前一个数值单元格
+                            last_numeric_cell.text += text
+                        else:
+                            # 段内独立文本词（"不适用"/"-"）：按列归位成文本单元格
+                            pending_cells.append(
+                                TableCell(row=d_idx, col=_col_for_xc(xc), text=text)
+                            )
+                    if label_parts:
+                        cells.append(TableCell(row=d_idx, col=0, text="".join(label_parts)))
+                    cells.extend(pending_cells)
+
+                if len(cells) < 8:
+                    prev_group_last_y0 = group_last_y0
+                    continue
+
+                tables.append(
+                    FinancialTable(
+                        table_id=f"A_p{page_num:03d}_textlayer_t{group_idx:02d}",
+                        title=LocalizedString(
+                            zh=f"第{page_num}页文本层表格", en=f"p{page_num} text-layer grid"
+                        ),
+                        page=page_num,
+                        bbox=(0.0, 0.0, 1.0, 1.0),
+                        cells=cells,
+                        currency=Currency.CNY,
+                    )
+                )
+                table_pages.add(page_num)
+                prev_group_last_y0 = group_last_y0
     finally:
         doc.close()
 

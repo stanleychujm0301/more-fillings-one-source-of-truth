@@ -12,6 +12,7 @@ from ahcc.table.headers import (
     annotate_table,
     build_grid,
     detect_header_rows,
+    grid_for,
     header_text_for_column,
 )
 from ahcc.table.models import TableGrid
@@ -29,6 +30,7 @@ __all__ = [
     "annotate_table",
     "build_grid",
     "detect_header_rows",
+    "grid_for",
     "header_text_for_column",
     "is_column_key_informative",
     "narrative_value_kind",

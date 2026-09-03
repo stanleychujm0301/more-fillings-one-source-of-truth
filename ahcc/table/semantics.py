@@ -192,10 +192,10 @@ def parse_kind(text: str | None) -> ValueKind:
         return ValueKind.MAIN
     simplified = to_simplified(text)
     normalized = simplified.lower()
-    compact = re.sub(r"[\s（）()]+", "", normalized)
+    compact = re.sub(r"[\s（）()]+", "", normalized).replace("％", "%")
     for kind, markers in _KIND_MARKERS:
         for marker in markers:
-            marker_compact = re.sub(r"[\s（）()]+", "", marker)
+            marker_compact = re.sub(r"[\s（）()]+", "", marker).replace("％", "%")
             if marker_compact and marker_compact in compact:
                 return kind
     return ValueKind.MAIN

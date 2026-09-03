@@ -16,7 +16,7 @@ from loguru import logger
 
 from ahcc.config import settings
 from ahcc.errors import friendly_error_message
-from ahcc.llm.client import consume_llm_failures, set_current_job_id
+from ahcc.llm.client import consume_llm_call_count, consume_llm_failures, set_current_job_id
 from ahcc.schemas import (
     DisclosureCoverageItem,
     DiffScope,
@@ -1188,6 +1188,9 @@ class Orchestrator:
             "currency_converted_match_count": sum(1 for d in job.diffs if d.rule_id == "currency_converted_match"),
             "context_mismatch_count": sum(1 for d in job.diffs if d.rule_id == "context_mismatch"),
             "llm_semantic_review_count": sum(1 for d in job.diffs if d.rule_id == "llm_semantic_review"),
+            # 真实 API 调用次数（上面那个只数「被成功降级的 Diff 数」，无法区分
+            # 「没调用」与「都判可比」—— e5a15ac1 全程 0 次 LLM 的观测盲区）
+            "llm_semantic_review_call_count": consume_llm_call_count(job.job_id),
             "internal_inconsistency_count": sum(1 for d in job.diffs if d.diff_type.value == "internal"),
             "key_metric_exact_diff_count": sum(1 for d in job.diffs if d.rule_id == "key_metric_exact_mismatch"),
             "visual_text_layer_mismatch_count": sum(1 for d in job.diffs if d.rule_id == "visual_text_layer_mismatch"),

@@ -240,6 +240,25 @@ def _record_current_job_llm_failure(reason: str) -> None:
         record_llm_failure(job_id, reason)
 
 
+# 实际 API 调用计数（job_id 维度）——llm_semantic_review_count 只统计「被成功
+# 降级的 Diff 数」，无法区分「没调用」与「都判可比」，此计数补足观测
+_llm_call_counts: dict[str, int] = {}
+_llm_call_counts_lock = threading.Lock()
+
+
+def consume_llm_call_count(job_id: str) -> int:
+    """读取并清空某任务的实际 LLM API 调用次数（一次性消费）。"""
+    with _llm_call_counts_lock:
+        return _llm_call_counts.pop(job_id, 0)
+
+
+def _record_current_job_llm_call() -> None:
+    job_id = _current_job_id.get()
+    if job_id:
+        with _llm_call_counts_lock:
+            _llm_call_counts[job_id] = _llm_call_counts.get(job_id, 0) + 1
+
+
 def cached_call(
     purpose: Purpose,
     messages: list[dict[str, Any]],
@@ -277,6 +296,7 @@ def cached_call(
         _record_current_job_llm_failure(f"{client.provider} API Key 未配置或为占位符")
         return {} if json_mode else ""
 
+    _record_current_job_llm_call()
     try:
         if json_mode:
             result = client.chat_json(messages, **kwargs)
