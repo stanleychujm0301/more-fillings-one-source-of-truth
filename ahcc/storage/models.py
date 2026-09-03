@@ -46,13 +46,17 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE TABLE IF NOT EXISTS diffs (
-    diff_id TEXT PRIMARY KEY,
+    diff_id TEXT NOT NULL,
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
     diff_type TEXT NOT NULL,
     severity TEXT NOT NULL,
     canonical_key TEXT,
     payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- 复合主键：diff_id 只在任务内唯一。旧结构 diff_id 全局 PRIMARY KEY 时，
+    -- 固定命名的差异（分支表 BRANCH_上海分行 等）会被下一个同公司任务
+    -- INSERT OR REPLACE 整体「抢走」——旧任务的差异行凭空消失。
+    PRIMARY KEY (job_id, diff_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_diffs_job ON diffs(job_id);
@@ -154,6 +158,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_job_columns(conn)
+    _migrate_diffs_composite_pk(conn)
     _ensure_user_profile_columns(conn)
     _rename_legacy_demo_accounts(conn)
     _seed_demo_accounts(conn)
@@ -161,6 +166,46 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     _backfill_job_ownership(conn)
     _ensure_indexes(conn)
     conn.commit()
+
+
+def _migrate_diffs_composite_pk(conn: sqlite3.Connection) -> None:
+    """diffs 表主键迁移：diff_id 全局 PK → (job_id, diff_id) 复合 PK。
+
+    旧结构下，固定命名的差异行（分支机构 BRANCH_上海分行 等 40 条 × 每个光大
+    任务）会被下一个同公司任务的 INSERT OR REPLACE 抢走 job_id —— 前一个任务
+    的差异在库里凭空消失（2026-09-04 实测：三个光大任务只剩最新一个有分支差异）。
+    SQLite 不能 ALTER 主键，走建新表-拷贝-改名。外键未启用，DROP 不受
+    reviews 的 FK 引用影响。
+    """
+    info = conn.execute("PRAGMA table_info(diffs)").fetchall()
+    if not info:
+        return
+    pk_columns = sorted((row[5], row[1]) for row in info if row[5])  # (pk序, 列名)
+    if [name for _, name in pk_columns] == ["diff_id", "job_id"] or (
+        len(pk_columns) == 2 and {name for _, name in pk_columns} == {"job_id", "diff_id"}
+    ):
+        return  # 已是复合主键
+    if [name for _, name in pk_columns] != ["diff_id"]:
+        return  # 未知结构，不动
+    conn.executescript(
+        """
+        CREATE TABLE diffs_v2 (
+            diff_id TEXT NOT NULL,
+            job_id TEXT NOT NULL REFERENCES jobs(job_id),
+            diff_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            canonical_key TEXT,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (job_id, diff_id)
+        );
+        INSERT INTO diffs_v2 (diff_id, job_id, diff_type, severity, canonical_key, payload_json, created_at)
+            SELECT diff_id, job_id, diff_type, severity, canonical_key, payload_json, created_at FROM diffs;
+        DROP TABLE diffs;
+        ALTER TABLE diffs_v2 RENAME TO diffs;
+        CREATE INDEX IF NOT EXISTS idx_diffs_job ON diffs(job_id);
+        """
+    )
 
 
 def _ensure_job_columns(conn: sqlite3.Connection) -> None:

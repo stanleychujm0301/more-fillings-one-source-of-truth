@@ -32,6 +32,13 @@ from ahcc.user_context import (
 )
 
 _CURRENT_RESULT_VERSION = 19
+# 数值检查重建的版本下限：version ≥ 17（4-gate 质量整顿之后）的旧结果不再
+# 在读取时重跑 run_numeric_checks_on_profiles —— 那是为整顿前 FP 风暴设计的
+# 一次性迁移，且每个任务要在 API 进程内跑约 1 分钟。2026-09-04 实测：result
+# 版本 18→19 bump 后全部历史任务同时变为「待重建」，读一次历史列表把事件循环
+# 堵死 20+ 分钟、整站无响应。≥ floor 的结果只补当前元数据并标 stale_result
+# （提示用户重跑获取新引擎结果），数值差异保留原样。
+_NUMERIC_REBUILD_FLOOR = 17
 _RUNNING_JOB_STATUSES = {
     JobStatus.PENDING.value,
     JobStatus.PARSING.value,
@@ -943,7 +950,11 @@ def get_diffs(job_id: str) -> list[Diff]:
         ).fetchone()
     diffs = [Diff.model_validate_json(row["payload_json"]) for row in rows]
     summary = _load_json_field(summary_row["comparison_summary_json"], {}) if summary_row else {}
-    if int(summary.get("result_version") or 0) >= _CURRENT_RESULT_VERSION:
+    version = int(summary.get("result_version") or 0)
+    if version >= _CURRENT_RESULT_VERSION:
+        return diffs
+    if version >= _NUMERIC_REBUILD_FLOOR:
+        # 质量整顿后的旧结果：数值差异保留原样（重跑见 _NUMERIC_REBUILD_FLOOR 注释）
         return diffs
     _, sanitized_diffs = _upgrade_legacy_job(job_id, summary, diffs)
     return sanitized_diffs
@@ -964,6 +975,12 @@ def _sanitize_summary_for_loaded_job(job_id: str, summary: dict) -> dict:
         return _attach_current_extraction_metadata(summary)
     if _is_legacy_h_bilingual_summary(summary):
         return _sanitize_legacy_h_bilingual_summary(summary)
+    if version >= _NUMERIC_REBUILD_FLOOR:
+        # 质量整顿后的旧结果：纯加字段升级，不重跑数值检查（防历史列表读取
+        # 阻塞事件循环）；stale_result 仍会提示用户用新引擎重跑
+        sanitized = dict(summary)
+        sanitized["result_version"] = _CURRENT_RESULT_VERSION
+        return _attach_current_extraction_metadata(sanitized)
 
     raw_diffs = _load_raw_diffs(job_id)
     if not raw_diffs:
