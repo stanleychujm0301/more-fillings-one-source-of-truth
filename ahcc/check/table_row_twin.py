@@ -130,11 +130,36 @@ def _eligible_label(label: str) -> bool:
     return label.lower() not in _GENERIC_LABELS
 
 
+def _column_role(key, table: FinancialTable, rows: dict, row_idx: int, cell) -> str:
+    """列角色：列键语义化（期间/本期上期/值种类/口径），缺失回退旧逻辑。
+
+    旧 role 只有年份或裸列号 —— 两侧列序不同的表 (label, col2)≠(label, col2)
+    配不上；语义化后 (label, '2024-12-31') 跨侧相等，本期/上期互换也可判。
+    """
+    if key is not None:
+        if key.period:
+            return key.period
+        if key.period_role:
+            return key.period_role
+        if key.kind != ValueKind.MAIN:
+            return f"kind:{key.kind.value}"
+        if key.scope:
+            return f"scope:{key.scope}"
+    header_text = _header_text_for_column(rows, row_idx, cell.col)
+    return _period_for_table_cell(table, header_text) or f"col{cell.col}"
+
+
 def _build_table_rows(table: FinancialTable) -> _TableRows:
     """把一张表的 cells 还原成 (标签, 列角色) -> 数值 的行映射。"""
+    from ahcc.schemas import ValueKind
+    from ahcc.table import grid_for
+
     result = _TableRows(table=table)
     if not table.cells:
         return result
+
+    grid = grid_for(table)
+    header_row_set = set(grid.header_row_indices)
 
     rows: dict[int, list] = {}
     for cell in table.cells:
@@ -142,7 +167,12 @@ def _build_table_rows(table: FinancialTable) -> _TableRows:
 
     for row_idx in sorted(rows.keys()):
         cells = sorted(rows[row_idx], key=lambda c: c.col)
-        if any(c.is_header for c in cells):
+        # 表头行跳过：优先用检测出的 header_row_indices（is_header 布尔被解析
+        # 引擎按关键词打标污染 —— 数据行含 "total"/"202" 会被误跳过丢行）
+        if header_row_set:
+            if row_idx in header_row_set:
+                continue
+        elif any(c.is_header for c in cells):
             continue
         found = _find_label_column(cells)
         if not found:
@@ -164,8 +194,7 @@ def _build_table_rows(table: FinancialTable) -> _TableRows:
                 continue
             if _digit_count(cell.text) < _MIN_DIGITS:
                 continue
-            header_text = _header_text_for_column(rows, row_idx, cell.col)
-            role = _period_for_table_cell(table, header_text) or f"col{cell.col}"
+            role = _column_role(grid.key_for(cell.col), table, rows, row_idx, cell)
             key = (label, role)
             # 同表同键重复（合并单元格/重复行）时保留首个，避免歧义配对
             if key in result.rows:
@@ -367,6 +396,12 @@ def run_table_row_twin_checks(
                     "按真实差异出报",
                     at.table.page, len(table_diffs), len(matched_keys),
                 )
+                # 结构性分组：整列错乱按表聚合呈现（检出数不变，明细折叠进组头）
+                group_id = f"rowtwin_permutation_p{at.table.page}"
+                table_diffs[0].structural_group_id = group_id
+                for d in table_diffs[1:]:
+                    d.structural_group_id = group_id
+                    d.is_structural_detail = True
 
             stats.paired_tables += 1
             used_h.add(h_idx)

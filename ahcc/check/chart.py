@@ -233,6 +233,39 @@ async def _check_one_chart(doc: ReportDocument, chart: ChartRegion, mode: str = 
     )
 
 
+def _pick_row_value(table, cells_sorted: list, label_cell) -> float | None:
+    """从行内数值列选值：列键 kind==MAIN 优先；期间与表级主期间一致优先。
+
+    无列键信息（表头缺失/未注解）时退回旧行为（第一个数值列）—— 列键缺失
+    永远宽松，不因信息缺失而漏配。
+    """
+    from ahcc.schemas import ValueKind
+    from ahcc.table import grid_for
+
+    grid = grid_for(table)
+    main_candidates: list[tuple[int, float]] = []  # (优先级, 值)
+    fallback: float | None = None
+    for cell in cells_sorted:
+        if cell is label_cell or cell.col <= label_cell.col:
+            continue
+        val = _parse_number(cell.text)
+        if val is None:
+            continue
+        if fallback is None:
+            fallback = val
+        key = grid.key_for(cell.col)
+        if key is None:
+            continue
+        if key.kind != ValueKind.MAIN:
+            continue  # 增减%/占比/附注号列不做图表取值
+        if key.period and grid.period and key.period == grid.period:
+            return val  # 与表级主期间一致的金额列 —— 最强候选
+        main_candidates.append((cell.col, val))
+    if main_candidates:
+        return main_candidates[0][1]
+    return fallback
+
+
 def _find_table_matches(doc: ReportDocument, chart: ChartRegion, data_points: list[dict]) -> dict[str, float]:
     """在同页表格中查找与图表数据对应的数据。
 
@@ -274,12 +307,9 @@ def _find_table_matches(doc: ReportDocument, chart: ChartRegion, data_points: li
             # 检查是否匹配图表中的某个标签
             for norm_label, orig_label in label_by_norm.items():
                 if norm_label in label_text or label_text in norm_label:
-                    # 从该行的其他列找数值
-                    for cell in cells_sorted[1:]:
-                        val = _parse_number(cell.text)
-                        if val is not None:
-                            matches[orig_label] = val
-                            break
+                    # 从该行的其他列找数值：优先「金额列且与图表期间口径一致」的列
+                    # （旧版取行内第一个数值列，哪个期间全凭运气 —— 横坐标未参与定位）
+                    matches[orig_label] = _pick_row_value(table, cells_sorted, label_cell)
                     break
 
     return matches

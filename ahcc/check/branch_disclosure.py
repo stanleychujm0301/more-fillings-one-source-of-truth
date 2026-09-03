@@ -13,6 +13,8 @@ from ahcc.align.glossary import to_simplified
 from ahcc.check.table_row_align import alignment_warning, check_row_alignment, log_report
 from ahcc.schemas import (
     Diff,
+    DiffExplanation,
+    DiffExplanationItem,
     DiffSeverity,
     DiffType,
     Evidence,
@@ -288,7 +290,80 @@ def compare_branch_tables(
         alignment_ratio,
         len(diffs),
     )
+
+    # 整列错乱聚合呈现：40 条散点淹没「数值列被整体重排」这个结构性结论。
+    # 检出数不变（一条不删），组头收纳全部行级明细，其余标 is_structural_detail。
+    if alignment.is_column_permuted and diffs:
+        _apply_permutation_group(diffs, len(matched_names))
+
     return diffs
+
+
+# 结构性分组 id（跨规则统一口径：table_row_twin 的整列错乱同样使用）
+BRANCH_PERMUTATION_GROUP_ID = "branch_asset_permutation"
+
+
+def _apply_permutation_group(diffs: list[Diff], matched_row_count: int) -> None:
+    """把整列错乱的逐行差异聚合为一个结构性发现 + 折叠明细。
+
+    组头 summary 给出结构性结论（多重集相等、锚点稳定），明细进入
+    diff_explanation.items —— UI/报告按组折叠，审计师仍可逐行定位证据。
+    """
+    head = diffs[0]
+    items: list[DiffExplanationItem] = []
+    for d in diffs:
+        a_ev = d.evidence[0] if d.evidence else None
+        h_ev = d.evidence[1] if d.evidence and len(d.evidence) > 1 else None
+        items.append(
+            DiffExplanationItem(
+                label=(d.topic.zh or d.diff_id),
+                role="branch_asset_scale",
+                a_value=d.a_value,
+                h_value=d.h_value,
+                delta=d.delta,
+                a_page=a_ev.page if a_ev else None,
+                h_page=h_ev.page if h_ev else None,
+                a_snippet=(a_ev.snippet[:120] if a_ev else None),
+                h_snippet=(h_ev.snippet[:120] if h_ev else None),
+            )
+        )
+    a_page = items[0].a_page
+    h_page = items[0].h_page
+    likely_layout_error = len(diffs) >= matched_row_count * 0.8
+    issue_tail = (
+        "疑似排版/装订错误，需人工核对原始底稿后确认是披露差异还是错位。"
+        if likely_layout_error
+        else "需人工核对。"
+    )
+    head.structural_group_id = BRANCH_PERMUTATION_GROUP_ID
+    head.diff_explanation = DiffExplanation(
+        headline=f"分支机构资产规模表整列错乱（{len(diffs)}/{matched_row_count} 行数值与行名称错配）",
+        issue=(
+            f"两侧 {matched_row_count} 行分行名称逐行一致、机构数量与办公地址（共位锚点）"
+            f"逐行一致，但资产规模列的 {len(diffs)} 个数值构成同一组数字的重新排列"
+            f"（两侧数值多重集完全相等）—— 数值列与行名称的绑定关系被整体重排。{issue_tail}"
+        ),
+        location=f"A股第{a_page or '?'}页 vs H股第{h_page or '?'}页",
+        items=items,
+        review_hint=(
+            "优先核对两份报告分支机构表的排版与数据绑定关系；若 H 侧确以当前顺序披露，"
+            "展开明细后每行仍是一条真实差异（本组已保留全部行级证据）。"
+        ),
+    )
+    head.summary = LocalizedString(
+        zh=(
+            f"分支机构资产规模表整列错乱：{matched_row_count} 行中 {len(diffs)} 行数值与行名称错配，"
+            f"两侧数值多重集完全相等、机构数量/办公地址逐行一致 —— 数值列被整体重排，需人工确认"
+        ),
+        en=(
+            f"Branch asset table column permutation: {len(diffs)} of {matched_row_count} rows "
+            f"have values bound to different branch names; value multisets are identical on both "
+            f"sides — requires manual confirmation"
+        ),
+    )
+    for d in diffs[1:]:
+        d.structural_group_id = BRANCH_PERMUTATION_GROUP_ID
+        d.is_structural_detail = True
 
 
 def load_branch_lightweight_doc(file_path: str, side: ReportSide) -> ReportDocument:

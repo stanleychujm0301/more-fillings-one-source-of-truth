@@ -258,6 +258,8 @@ export type DiffItem = {
   chart_cross?: ChartCrossCheck | null
   rule_id?: string | null
   review_status?: string | null
+  structural_group_id?: string | null
+  is_structural_detail?: boolean | null
 }
 
 export type JobDetail = JobSummary & {
@@ -1395,6 +1397,7 @@ function JobDetailPage({
 }) {
   const [selectedTriage, setSelectedTriage] = useState<DiffTriageScope>('real')
   const [selectedSource, setSelectedSource] = useState<DiffSourceScope>('cross_report')
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   if (!job) return <JobDetailLoading />
   const summary = job.comparison_summary || {}
   const diffs = job.diffs || []
@@ -1539,25 +1542,72 @@ function JobDetailPage({
               <span className={`triage ${triageClass(selectedTriage)}`}>{activeDiffs.length} 项</span>
             </div>
             <div className="diff-active-list">
-              {activeDiffs.length ? activeDiffs.map((diff) => {
-                const values = reviewValues(diff)
-                return (
-                  <article className="diff-source-row" id={`diff-row-${diff.diff_id}`} key={diff.diff_id}>
-                    <div className="diff-source-row-main">
-                      <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
-                      <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
-                      <strong>{diff.diff_explanation?.headline || localized(diff.topic)}</strong>
-                      <p>{diff.diff_explanation?.issue || localized(diff.summary)}</p>
-                      <small>规则 ID {diff.rule_id || '—'} · {evidencePages(diff, labels)}</small>
-                    </div>
-                    <div className="diff-source-row-meta">
-                      <span>{valueText(values.aValue)}</span>
-                      <span>{valueText(values.hValue)}</span>
-                      <button type="button" className="ghost" onClick={() => setActiveDiff(diff)}>查看证据</button>
-                    </div>
-                  </article>
-                )
-              }) : <div className="diff-source-empty">暂无此类差异</div>}
+              {activeDiffs.length ? (() => {
+                // 结构性分组折叠：组头一行呈现结构性结论，明细默认折叠
+                // （检出数不变 —— 展开后每条行级差异仍可单独定位证据）
+                const visibleDiffs = activeDiffs.filter((diff) => !diff.is_structural_detail)
+                const detailCountByGroup: Record<string, number> = {}
+                for (const diff of activeDiffs) {
+                  if (diff.structural_group_id) {
+                    detailCountByGroup[diff.structural_group_id] =
+                      (detailCountByGroup[diff.structural_group_id] || 0) + 1
+                  }
+                }
+                const rows: JSX.Element[] = []
+                for (const diff of visibleDiffs) {
+                  const values = reviewValues(diff)
+                  const groupId = diff.structural_group_id
+                  const detailCount = detailCountByGroup[groupId] || 0
+                  const expanded = !!(groupId && expandedGroups[groupId])
+                  rows.push(
+                    <article className="diff-source-row" id={`diff-row-${diff.diff_id}`} key={diff.diff_id}>
+                      <div className="diff-source-row-main">
+                        <span className={`severity ${diff.severity}`}>{severityLabel(diff.severity)}</span>
+                        <span className="type-chip">{diffTypeLabel(diff.diff_type)}</span>
+                        <strong>{diff.diff_explanation?.headline || localized(diff.topic)}</strong>
+                        <p>{diff.diff_explanation?.issue || localized(diff.summary)}</p>
+                        <small>规则 ID {diff.rule_id || '—'} · {evidencePages(diff, labels)}</small>
+                        {groupId ? (
+                          <button
+                            type="button"
+                            className="ghost structural-toggle"
+                            onClick={() => setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }))}
+                          >
+                            {expanded ? '收起' : '展开'} {detailCount} 处行级明细
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="diff-source-row-meta">
+                        <span>{valueText(values.aValue)}</span>
+                        <span>{valueText(values.hValue)}</span>
+                        <button type="button" className="ghost" onClick={() => setActiveDiff(diff)}>查看证据</button>
+                      </div>
+                    </article>
+                  )
+                  if (groupId && expanded) {
+                    const detailRows = activeDiffs.filter((item) => item.is_structural_detail && item.structural_group_id === groupId)
+                    for (const detail of detailRows) {
+                      const detailValues = reviewValues(detail)
+                      rows.push(
+                        <article className="diff-source-row structural-detail-row" id={`diff-row-${detail.diff_id}`} key={detail.diff_id}>
+                          <div className="diff-source-row-main">
+                            <span className={`severity ${detail.severity}`}>{severityLabel(detail.severity)}</span>
+                            <strong>{localized(detail.topic)}</strong>
+                            <p>{localized(detail.summary)}</p>
+                            <small>{evidencePages(detail, labels)}</small>
+                          </div>
+                          <div className="diff-source-row-meta">
+                            <span>{valueText(detailValues.aValue)}</span>
+                            <span>{valueText(detailValues.hValue)}</span>
+                            <button type="button" className="ghost" onClick={() => setActiveDiff(detail)}>查看证据</button>
+                          </div>
+                        </article>
+                      )
+                    }
+                  }
+                }
+                return rows
+              })() : <div className="diff-source-empty">暂无此类差异</div>}
             </div>
           </div>
         </div>

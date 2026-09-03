@@ -99,6 +99,7 @@ class _TableRow:
     text: str
     section: str | None = None
     unit: str | None = None  # 从 FinancialTable.unit 继承的单位声明
+    header_context: str | None = None  # 该表列头串（横坐标上下文：期间/口径/值种类）
 
 
 @dataclass(frozen=True)
@@ -2763,6 +2764,8 @@ def _build_table_row_index(en_rows: list[_TableRow]) -> dict[str, Any]:
 
 
 def _table_rows_from_doc(doc: ReportDocument) -> list[_TableRow]:
+    from ahcc.table import grid_for
+
     rows: list[_TableRow] = []
     for table in doc.tables:
         if _skip_bilingual_table_rows(table):
@@ -2773,8 +2776,20 @@ def _table_rows_from_doc(doc: ReportDocument) -> list[_TableRow]:
         title = _clean_text(table.title.zh or table.title.en or "")
         # 继承表格级单位声明（如"人民币千元"）到每一行
         inherited_unit = _clean_text(table.unit or "")
+        # 列头串（横坐标上下文）：旧版整行丢弃 row==0 —— 中英文列头（期间/口径）
+        # 无法参与行配对；现挂到每行的 header_context 供配对加分与 LLM payload
+        grid = grid_for(table)
+        header_indices = set(grid.header_row_indices) or ({0} if 0 in cells_by_row else set())
+        header_parts = []
+        for h_row in sorted(header_indices):
+            header_parts.extend(
+                (cell.text or "").strip()
+                for cell in sorted(cells_by_row.get(h_row, []), key=lambda c: c.col)
+                if (cell.text or "").strip()
+            )
+        header_context = _clean_text(" | ".join(header_parts))[:200] or None
         for row, cells in sorted(cells_by_row.items()):
-            if row == 0:
+            if row in header_indices:
                 continue
             text = _clean_text(" ".join(cell.text or "" for cell in sorted(cells, key=lambda c: c.col)))
             if len(text) < 4:
@@ -2783,6 +2798,7 @@ def _table_rows_from_doc(doc: ReportDocument) -> list[_TableRow]:
                 table_id=table.table_id, page=table.page, title=title, row=row,
                 text=f"{title} {text}".strip(), section=title,
                 unit=inherited_unit or None,
+                header_context=header_context,
             ))
     return rows
 
@@ -2828,7 +2844,35 @@ def _row_match_score(zh_row: _TableRow, en_row: _TableRow) -> int:
     # （单位不一致不直接判不配对，因千元/million 可能本就是翻译单位选择差异）
     if zh_row.unit and en_row.unit and _unit_multiplier(zh_row.unit) != _unit_multiplier(en_row.unit):
         score -= 2
+    # 列头维度（横坐标）：两侧列头的期间集合一致加分、不一致扣分 ——
+    # 「本期/上期」互换、期间错配的行不再因数值相近而配平
+    zh_periods = _header_period_tokens(zh_row.header_context)
+    en_periods = _header_period_tokens(en_row.header_context)
+    if zh_periods and en_periods:
+        if zh_periods == en_periods:
+            score += 1
+        else:
+            score -= 2
     return score
+
+
+def _header_period_tokens(header_context: str | None) -> set[str]:
+    """列头串里的期间集合（本期/上期映射为相对键，日期取年份+月日归一）。"""
+    if not header_context:
+        return set()
+    from ahcc.table.semantics import parse_period
+
+    tokens: set[str] = set()
+    for part in re.split(r"\||\s{2,}|\t", header_context):
+        part = part.strip()
+        if not part:
+            continue
+        period, role = parse_period(part)
+        if period:
+            tokens.add(period)
+        elif role:
+            tokens.add(role)
+    return tokens
 
 
 def _table_title_score(zh_title: str, en_title: str) -> bool:

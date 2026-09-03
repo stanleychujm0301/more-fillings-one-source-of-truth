@@ -18,14 +18,16 @@ from ahcc.schemas import ColumnHeader, ColumnKey, FinancialTable, TableCell
 from ahcc.table.models import TableGrid
 from ahcc.table.semantics import parse_column_key
 
-# 表头强信号词（简繁统一后匹配）
+# 表头强信号词（简繁统一后匹配）。注意：不能放会出现在数据值里的词 ——
+# 单位词（"人民币"/"million"/"百万元"）在「人民币25亿元」「RMB100 million」
+# 这类文本值里出现，放进信号表会把全文本数据行误判成表头（双语通道丢行）。
 _HEADER_SIGNAL_MARKERS = (
     "项目", "科目", "附注", "单位", "期间", "年度", "本期", "上期", "本期数", "上期数",
     "金额", "占比", "增减", "变动", "比率", "余额", "账面价值", "公允价值",
+    "本集团", "母公司", "合并",
     "item", "notes", "note", "unit", "period", "current", "prior", "amount",
     "balance", "percentage", "change", "year", "quarter", "december", "june",
-    "march", "september", "百万", "千元", "万元", "亿元", "million", "thousand",
-    "人民币", "rmb",
+    "march", "september", "consolidated", "parent", "group",
 )
 
 # 最多认定的表头行数（两级表头 + 单位行）
@@ -34,6 +36,12 @@ _MAX_HEADER_ROWS = 3
 _HEADER_NUMERIC_RATIO_MAX = 0.3
 
 _NUMBER_RE = re.compile(r"^[（(\[\s]*-?[\d,，]+(?:\.\d+)?[）)\]%\s]*$")
+# 期间单元格：裸年份/季度/半年 —— 是列头不是数值（完整日期「2025年12月31日」
+# 与信号词同行出现，走信号词路径，无需在此穷举）
+_PERIOD_CELL_RE = re.compile(
+    r"^(?:19|20)\d{2}$|^[一二三四1-4]季度$|^第[一二三四1-4]季度$|^[上下]半年$|^q[1-4]$",
+    re.IGNORECASE,
+)
 
 
 def _is_numeric_cell(text: str) -> bool:
@@ -44,11 +52,22 @@ def _is_numeric_cell(text: str) -> bool:
     return bool(_NUMBER_RE.match(stripped))
 
 
-def _row_numeric_ratio(cells: list[TableCell]) -> float:
+def _is_period_cell(text: str) -> bool:
+    """单元格是否整体是一个期间（裸年/日期/季度）—— 列头而非数值。"""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    return bool(_PERIOD_CELL_RE.match(stripped))
+
+
+def _row_value_ratio(cells: list[TableCell]) -> float:
+    """数值（非期间）单元格占比 —— 表头行的判定基础。"""
     non_empty = [c for c in cells if (c.text or "").strip()]
     if not non_empty:
         return 0.0
-    numeric = sum(1 for c in non_empty if _is_numeric_cell(c.text))
+    numeric = sum(
+        1 for c in non_empty if _is_numeric_cell(c.text) and not _is_period_cell(c.text)
+    )
     return numeric / len(non_empty)
 
 
@@ -61,14 +80,27 @@ def _row_has_header_signal(cells: list[TableCell]) -> bool:
 
 
 def _is_header_like(cells: list[TableCell]) -> bool:
-    """行是否像表头：整行无数值，或数值占比低且含表头信号词。"""
-    ratio = _row_numeric_ratio(cells)
-    if ratio == 0.0:
+    """行是否像表头。
+
+    三条准入路径（任一）：
+    1. 行内全部非空 cell 都是期间（"2024|2023|2022" 年份列头行）；
+    2. 数值占比低且含表头信号词（"项目|2025年12月31日|附注"）；
+    3. 数值占比低且解析引擎已全部标记 is_header（camelot 首行/HTML th）。
+    全文本数据行（"公司债券|人民币25亿元"）无信号词不算表头 —— 双语通道
+    的文本值表格不被误吞。
+    """
+    non_empty = [c for c in cells if (c.text or "").strip()]
+    if not non_empty:
+        return False
+    # 1) 纯期间行
+    if all(_is_period_cell(c.text) for c in non_empty):
         return True
+    ratio = _row_value_ratio(cells)
+    # 2) 信号词 + 低数值占比
     if ratio <= _HEADER_NUMERIC_RATIO_MAX and _row_has_header_signal(cells):
         return True
-    # is_header 布尔作为辅助信号：解析引擎标记的首行 + 低数值占比
-    if ratio <= _HEADER_NUMERIC_RATIO_MAX and all(c.is_header for c in cells if (c.text or "").strip()):
+    # 3) 解析引擎标记 + 低数值占比
+    if ratio <= _HEADER_NUMERIC_RATIO_MAX and all(c.is_header for c in non_empty):
         return True
     return False
 

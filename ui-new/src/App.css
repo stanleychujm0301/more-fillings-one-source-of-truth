@@ -4485,3 +4485,15 @@ label input:focus {
     width: 100%;
   }
 }
+
+/* 结构性分组折叠（整列错乱等）：组头收纳明细，展开后行级差异可单独定位 */
+.structural-toggle {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.structural-detail-row {
+  margin-left: 20px;
+  opacity: 0.92;
+  border-left: 2px solid rgba(0, 51, 102, 0.35);
+}

@@ -65,6 +65,28 @@ def _diff_explanation_text(diff) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def _column_context_text(diff) -> str:
+    """A/H 两侧的列口径（横坐标表头），从证据 snippet 的「行标签 · 列头」格式提取。
+
+    展示用途 —— 让审计师直接看到两侧数值各取自哪一列（期间/口径/值种类），
+    跨期/跨口径的假差异一眼可辨。
+    """
+    import re as _re
+
+    def _header_of(evidence) -> str:
+        snippet = getattr(evidence, "snippet", "") or ""
+        match = _re.search(r"\[[^\]]*?\s*·\s*([^\]]+)\]", snippet)
+        return match.group(1).strip() if match else ""
+
+    a_header = _header_of(diff.evidence[0]) if diff.evidence else ""
+    h_header = _header_of(diff.evidence[1]) if diff.evidence and len(diff.evidence) > 1 else ""
+    if a_header and h_header and a_header != h_header:
+        return f"A 列：{a_header}\nH 列：{h_header}"
+    if a_header or h_header:
+        return f"列：{a_header or h_header}"
+    return ""
+
+
 def _side_location_and_value(diff, side: str, labels: dict[str, str] | None = None) -> str:
     side_label = (labels or _side_labels()).get(side, side)
     explanation = getattr(diff, "diff_explanation", None)
@@ -223,6 +245,7 @@ def export_excel(job: Job, out_path: Path) -> None:
         "差异类型",
         "主题",
         "差异说明",
+        "列口径",
         f"{side_labels['A']}定位与取值",
         f"{side_labels['H']}定位与取值",
         "A 股值",
@@ -284,6 +307,7 @@ _DIFF_WIDTHS = {
     "差异类型": 12,
     "主题": 26,
     "差异说明": 48,
+    "列口径": 22,
     "*定位与取值": 38,
     "A 股值": 16,
     "H 股值": 16,
@@ -317,6 +341,7 @@ def _write_diff_sheet(ws, diffs, headers, side_labels: dict[str, str] | None = N
             S.diff_type_label_zh(diff.diff_type),
             diff.topic.best(),
             _diff_explanation_text(diff),
+            _column_context_text(diff),
             _side_location_and_value(diff, "A", side_labels),
             _side_location_and_value(diff, "H", side_labels),
             diff.a_value,

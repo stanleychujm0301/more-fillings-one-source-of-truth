@@ -1163,6 +1163,25 @@ class Orchestrator:
         blocking_warnings = [item for item in warnings if item.get("blocking")]
         auxiliary_warnings = [item for item in warnings if item.get("category") == "auxiliary_chart"]
         diff_scope_counts = self._diff_scope_counts(job.diffs)
+        # 结构性分组（整列错乱等）：组头 + 明细数，UI/报告按组折叠呈现
+        structural_groups = []
+        seen_groups: set[str] = set()
+        for d in job.diffs:
+            group_id = d.structural_group_id
+            if not group_id or group_id in seen_groups:
+                continue
+            seen_groups.add(group_id)
+            structural_groups.append(
+                {
+                    "group_id": group_id,
+                    "rule_id": d.rule_id,
+                    "headline": (d.summary.zh or "")[:160],
+                    "detail_count": sum(
+                        1 for x in job.diffs if x.structural_group_id == group_id
+                    ),
+                    "head_diff_id": d.diff_id,
+                }
+            )
         return {
             "result_version": _CURRENT_RESULT_VERSION,
             "parser_version": PARSER_VERSION,
@@ -1197,6 +1216,7 @@ class Orchestrator:
             "text_overlay_tamper_count": sum(1 for d in job.diffs if d.rule_id == "text_overlay_tamper"),
             "internal_event_diff_count": sum(1 for d in job.diffs if d.rule_id == "event_internal_fact_match"),
             "diff_scope_counts": diff_scope_counts,
+            "structural_groups": structural_groups,
             "cross_report_diff_count": sum(
                 diff_scope_counts[triage][DiffScope.CROSS_REPORT.value]
                 for triage in ("real", "unresolved", "expected")
