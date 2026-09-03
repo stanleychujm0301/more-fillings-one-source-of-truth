@@ -1556,8 +1556,8 @@ function JobDetailPage({
                 const rows: JSX.Element[] = []
                 for (const diff of visibleDiffs) {
                   const values = reviewValues(diff)
-                  const groupId = diff.structural_group_id
-                  const detailCount = detailCountByGroup[groupId] || 0
+                  const groupId = diff.structural_group_id || null
+                  const detailCount = (groupId && detailCountByGroup[groupId]) || 0
                   const expanded = !!(groupId && expandedGroups[groupId])
                   rows.push(
                     <article className="diff-source-row" id={`diff-row-${diff.diff_id}`} key={diff.diff_id}>

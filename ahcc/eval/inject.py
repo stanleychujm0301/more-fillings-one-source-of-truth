@@ -33,7 +33,7 @@ from typing import Iterable, Literal
 
 from loguru import logger
 
-InjectionMethod = Literal["overlay", "edit", "swap"]
+InjectionMethod = Literal["overlay", "edit", "swap", "period_swap"]
 
 # 只在这些页上注入：含财务关键词的页，避免把封面/目录/纯叙述页当成目标。
 _FINANCIAL_PAGE_MARKERS = (
@@ -216,7 +216,10 @@ def inject_errors(
 ) -> list[InjectedError]:
     """在 `src_pdf` 上注入 `count` 处已知错误，写出 `out_pdf`，返回答案清单。
 
-    三种方式在目标上均匀轮转，保证每种方式都有足够样本量分别统计召回率。
+    注入方式在目标上均匀轮转，保证每种方式都有足够样本量分别统计召回率。
+    period_swap 与 swap 的区别：伙伴必须在不同列（x 中心距离 ≥30pt，即不同
+    期间列，表头不动）—— 检出依赖列键期间硬门槛与 twin 语义 role，而不是
+    位置巧合。
     """
     import fitz
 
@@ -242,8 +245,10 @@ def inject_errors(
             _, fontsize = _span_font(page, rect)
             label = _row_label(words, rect)
 
-            if method == "swap":
-                partner = _find_row_partner(words, rect, text)
+            if method in ("swap", "period_swap"):
+                partner = _find_row_partner(
+                    words, rect, text, min_column_distance=30.0 if method == "period_swap" else 0.0
+                )
                 if partner is None:
                     continue
                 p_rect, p_text = partner
@@ -254,12 +259,16 @@ def inject_errors(
                     InjectedError(
                         seq=len(records) + 1,
                         page=page_idx + 1,
-                        method="swap",
+                        method=method,
                         original_value=text,
                         tampered_value=p_text,
                         row_label=label,
                         bbox=tuple(float(v) for v in rect),
-                        note=f"与同行 {p_text} 互换位置",
+                        note=(
+                            f"与同行不同期间列的 {p_text} 互换（表头不动）"
+                            if method == "period_swap"
+                            else f"与同行 {p_text} 互换位置"
+                        ),
                     )
                 )
                 continue
@@ -302,9 +311,20 @@ def inject_errors(
     return records
 
 
-def _find_row_partner(words: list, rect, text: str) -> tuple[tuple, str] | None:
-    """在同一行里找另一个数字词作为换位伙伴（值必须不同，否则换了等于没换）。"""
+def _find_row_partner(
+    words: list,
+    rect,
+    text: str,
+    *,
+    min_column_distance: float = 0.0,
+) -> tuple[tuple, str] | None:
+    """在同一行里找另一个数字词作为换位伙伴（值必须不同，否则换了等于没换）。
+
+    min_column_distance > 0 时要求伙伴与目标分属不同列（x 中心距离门槛）——
+    period_swap 用它保证互换发生在两个期间列之间（表头不动）。
+    """
     y0, y1 = rect[1], rect[3]
+    target_xc = (rect[0] + rect[2]) / 2
     for w in words:
         w_rect = tuple(w[:4])
         if w_rect == tuple(rect):
@@ -320,6 +340,10 @@ def _find_row_partner(words: list, rect, text: str) -> tuple[tuple, str] | None:
             continue
         if w[4] == text:
             continue
+        if min_column_distance > 0:
+            partner_xc = (w[0] + w[2]) / 2
+            if abs(partner_xc - target_xc) < min_column_distance:
+                continue
         return w_rect, w[4]
     return None
 

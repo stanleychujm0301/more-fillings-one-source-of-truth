@@ -994,10 +994,13 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
                     continue
                 page = pdf.pages[i - 1]
                 page_text = page_texts.get(i, "")
-                page_tables: list[list[list[str | None]]] = []
+                page_tables: list[tuple[tuple, list[list[str | None]]]] = []
                 try:
-                    page_tables = page.extract_tables() or []
-                    page_tables = [t for t in page_tables if _is_useful_h_raw_table(t)]
+                    # find_tables（而非 extract_tables）：Table 对象带 bbox，
+                    # 表级坐标透传给 FinancialTable.bbox（证据链定位）
+                    found_tables = page.find_tables()
+                    page_tables = [(ft.bbox, ft.extract()) for ft in found_tables]
+                    page_tables = [t for t in page_tables if _is_useful_h_raw_table(t[1])]
                 except Exception as e:
                     audit_flags.append("table_page_failed")
                     audit_warnings.append(f"Table extraction failed on page {i}: {e}")
@@ -1005,8 +1008,9 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
                     pdfplumber_default_pages.add(i)
                 if not page_tables and (i in core_section_pages or _looks_like_table_page(page_text)):
                     try:
-                        page_tables = page.extract_tables(table_settings=_H_PDFPLUMBER_TEXT_SETTINGS) or []
-                        page_tables = [t for t in page_tables if _is_useful_h_raw_table(t)]
+                        found_tables = page.find_tables(table_settings=_H_PDFPLUMBER_TEXT_SETTINGS)
+                        page_tables = [(ft.bbox, ft.extract()) for ft in found_tables]
+                        page_tables = [t for t in page_tables if _is_useful_h_raw_table(t[1])]
                         if page_tables:
                             pdfplumber_text_pages.add(i)
                     except Exception as e:
@@ -1014,9 +1018,9 @@ def _parse_h_pdf(file_path: str) -> ReportDocument:
                         audit_warnings.append(f"Text-strategy table extraction failed on page {i}: {e}")
                 if page_tables:
                     table_page_nums.add(i)
-                    for j, t in enumerate(page_tables, start=1):
+                    for j, (t_bbox, t) in enumerate(page_tables, start=1):
                         source = "text" if i in pdfplumber_text_pages and i not in pdfplumber_default_pages else "pl"
-                        ft = _convert_h_table(t, i, j, f"H_p{i:03d}_{source}_t{j:02d}")
+                        ft = _convert_h_table(t, i, j, f"H_p{i:03d}_{source}_t{j:02d}", bbox=t_bbox)
                         tables.append(ft)
 
     logger.info(f"H 股 pdfplumber 提取: {len(tables)} 个表格({len(table_page_nums)} 个财务页)")
@@ -1556,8 +1560,17 @@ def _detect_h_unit_currency(texts: list[TextSegment]) -> tuple[str | None, Curre
     return "RMB thousand", Currency.CNY
 
 
-def _convert_h_table(raw_table: list[list[str | None]], page: int, table_idx: int, table_id: str) -> FinancialTable:
-    """将 pdfplumber 原始表格转为 FinancialTable（H 股版）。"""
+def _convert_h_table(
+    raw_table: list[list[str | None]],
+    page: int,
+    table_idx: int,
+    table_id: str,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> FinancialTable:
+    """将 pdfplumber 原始表格转为 FinancialTable（H 股版）。
+
+    bbox：pdfplumber find_tables 的表级坐标（x0, top, x1, bottom，页顶原点）。
+    """
     cells: list[TableCell] = []
     title = ""
     if raw_table and raw_table[0]:
@@ -1578,11 +1591,12 @@ def _convert_h_table(raw_table: list[list[str | None]], page: int, table_idx: in
     if inferred:
         section = sorted(inferred)[0]
 
+    safe_bbox = bbox if bbox and (bbox[2] > bbox[0] and bbox[3] > bbox[1]) else (0.0, 0.0, 0.0, 0.0)
     return FinancialTable(
         table_id=table_id,
         title=LocalizedString(en=title),
         page=page,
-        bbox=(0.0, 0.0, 0.0, 0.0),
+        bbox=safe_bbox,
         cells=cells,
         section=section,
     )

@@ -460,7 +460,7 @@ def cmd_self_check(
 @app.command("inject")
 def cmd_inject(
     pdf: Path = typer.Option(..., help="干净的源 PDF"),
-    count: int = typer.Option(90, help="注入错误数（会在三种方式间均分）"),
+    count: int = typer.Option(90, help="注入错误数（会在各方式间均分）"),
     seed: int = typer.Option(7, help="随机种子，保证可复现"),
     out: Path = typer.Option(Path("storage/eval"), help="输出目录"),
     overlay_only: bool = typer.Option(
@@ -469,15 +469,22 @@ def cmd_inject(
     counterpart: Optional[Path] = typer.Option(
         None, help="另一侧 PDF；不传则用原始未注入的 PDF 作为对照侧"
     ),
+    methods: str = typer.Option(
+        "overlay,edit,swap,period_swap",
+        help="注入方式（逗号分隔）：overlay/edit/swap/period_swap",
+    ),
 ) -> None:
-    """注入式召回：三种造错方式分别统计召回率。
+    """注入式召回：各造错方式分别统计召回率。
 
     只有 `overlay` 能被 text_overlay_tamper 检出；`edit` 与 `swap` 必须靠
     跨报告比对 / 勾稽校验 / 内部一致性才能发现 —— 这才是真实召回。
+    `period_swap`（期间列互换，表头不动）验证列键期间硬门槛与 twin 语义
+    role 的检出能力。
     """
     out.mkdir(parents=True, exist_ok=True)
     tampered = out / f"injected_{pdf.stem[:30]}.pdf"
-    records = inject_errors(pdf, tampered, count=count, seed=seed)
+    method_list = [m.strip() for m in methods.split(",") if m.strip()]
+    records = inject_errors(pdf, tampered, count=count, seed=seed, methods=method_list)
     export_injection_manifest(records, out / f"injected_{pdf.stem[:30]}_manifest.xlsx")
     if not records:
         print("未能注入任何错误（源 PDF 可能没有可用的财务数字目标）。")
@@ -491,7 +498,7 @@ def cmd_inject(
 
     context = _run_context("inject-overlay-only" if overlay_only else "inject-full-pipeline")
     per_method: list[tuple[str, EvalReport]] = []
-    for method in ("overlay", "edit", "swap"):
+    for method in ("overlay", "edit", "swap", "period_swap"):
         subset = [r for r in records if r.method == method]
         if not subset:
             continue

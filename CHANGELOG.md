@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added — 核查工程能力升级：表格列维度结构化（行×列二维坐标系）
+
+把「横坐标表头」（列维度）从临时解析的字符串升级为与行维度同等的结构化一等
+公民：每个数值单元格携带 (行标签, 列键) 二维坐标，列键含期间(到月日)/口径/
+值种类/单位；所有比对通道按列键对齐。以 e5a15ac1（光大银行 2025 A/H）为
+验收样本：
+
+- 新增 `ahcc/table/` 模块（headers/semantics/compat/models）：表头行检测
+  （免疫 is_header 关键词污染）、多级表头展开、colspan 左继承、列头语义
+  归一化、`pairable` 兼容判定 —— 列键明确才硬否决，列键缺失永远宽松回退。
+- A 股快速路径（文本层重建）：表头行保留（旧版注释写保留、代码整行丢弃 —
+  流动性覆盖率跨期假差异的根因）；期间碎片分类（"2025 年"拆词、日期词≠
+  数值词）；子表切分（多表页/多节页列几何不再互染，光大 p20 三表、p17 五节）；
+  单位后缀贴回（"-0.06 个百分点"）；`_parse_number` 支持前导正号；
+  监管指标页（资本充足率/流动性覆盖率等）进财务页预筛。
+- 消灭五组假差异：流动性覆盖率 Q4 列 vs Q2 列（期间到月日硬门槛）、每股收益
+  0.58 vs 增减%列 7.94（值种类）、负债合计⊂未折现租赁负债合计（子串防护）、
+  资产总计附注页候选（同口径精确匹配优先降级留痕）、利息净收入"1.53 个
+  百分点"（叙述值 kind 标记）。40 条分支机构真实检出一条不少。
+- LLM 复核链路修复：e5a15ac1 全程 0 次 LLM 的三层根因（词表过窄/列键缺失
+  永不触发/计数语义失真）；高危且列键不完整强制核验（预算 8 次，DeepSeek
+  并发 ≤3）；payload 补列头/行标签字段（prompt 一直要求、payload 一直没给）。
+- 整列错乱聚合呈现：分支表 40 条散点聚合为 1 条结构性发现（多重集相等/锚点
+  稳定/数值列整体重排）+ 折叠明细，检出数不变；comparison_summary 新增
+  structural_groups 与 llm_semantic_review_call_count；UI 按组折叠展开；
+  Excel 增加「列口径」列。
+- 通道升级：chart 取数列键驱动（期间匹配优先）；table_row_twin role 语义化
+  （跨侧列序不同可配，本期/上期互换可判）+ 表头行跳过改读 header_row_indices
+  （is_header 污染丢行修复）；bilingual 列表头不再丢弃（header_context 参与
+  行配对，期间错配扣分）。
+- 证据链：表级/单元格级 bbox 透传（pdfplumber find_tables + 快速路径词坐标，
+  零额外解析成本）；Evidence 携带 table_id/cell_ref。
+- 评估：注入方式新增 `period_swap`（期间列互换、表头不动），验证列键期间
+  硬门槛与 twin 语义 role 的检出能力。
+- 版本：result_version 19、extraction engine 2026-09-01.14、h_pdf 缓存 v4。
+- 回滚开关：fast_path_header_rows / column_key_hard_gate /
+  internal_substring_label_guard / key_metric_llm_review_max_calls。
+
 ### Fixed
 
 - 恢复光大银行分支机构 40 处 A/H 不一致的检出。此前的「行错位自检」把

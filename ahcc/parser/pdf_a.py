@@ -568,9 +568,9 @@ def _reconstruct_textlayer_tables(
     年报主表/摘要在 PDF 里是规则排布的文本网格：标签列在左、数值列在右。这里
     按 y 坐标把词聚成行、按 x 坐标把词聚成列（列中心聚类），拼出对齐的
     FinancialTable —— 供表格行孪生比对（edit/swap 检出）在 A 侧快速路径下也有
-    `doc.tables` 可用。每页按垂直间隙切成子表区域（多表页各表列几何不同），
-    区域内保留 ≤3 行表头（旧版整行丢弃，列键全空）。宁缺毋滥：只有财务关键词
-    页才重建。
+    `doc.tables` 可用。每页按垂直间隙/组标签行切段、同几何段合并成组（多表页
+    各表列几何不同），每组保留 ≤3 行表头（旧版整行丢弃，列键全空），表级与
+    单元格级 bbox 直接取词坐标。宁缺毋滥：只有财务关键词页才重建。
     """
     try:
         import fitz
@@ -667,22 +667,34 @@ def _reconstruct_textlayer_tables(
                     return 1 + min(range(ncols), key=lambda i: abs(xc - col_centers[i]))
 
                 def _append_header_cells(band: list, row_idx: int) -> None:
-                    buckets: dict[int, list[str]] = {}
+                    buckets: dict[int, list] = {}
                     for w in sorted(band, key=lambda w: w[0]):
                         text = str(w[4]).strip()
                         if not text:
                             continue
                         xc = (w[0] + w[2]) / 2
                         col = 0 if xc < label_boundary else _col_for_xc(xc)
-                        buckets.setdefault(col, []).append(text)
+                        buckets.setdefault(col, []).append((text, (w[0], w[1], w[2], w[3])))
                     for col in sorted(buckets):
-                        parts = buckets[col]
+                        parts = [item[0] for item in buckets[col]]
                         joined = (
                             "".join(parts)
                             if all(re.search(r"[一-龥]", p) for p in parts)
                             else " ".join(parts)
                         )
-                        cells.append(TableCell(row=row_idx, col=col, text=joined, is_header=True))
+                        x0 = min(item[1][0] for item in buckets[col])
+                        y0 = min(item[1][1] for item in buckets[col])
+                        x1 = max(item[1][2] for item in buckets[col])
+                        y1 = max(item[1][3] for item in buckets[col])
+                        cells.append(
+                            TableCell(
+                                row=row_idx,
+                                col=col,
+                                text=joined,
+                                is_header=True,
+                                bbox=(x0, y0, x1, y1),
+                            )
+                        )
 
                 for h_idx, band in enumerate(header_bands):
                     _append_header_cells(band, h_idx)
@@ -698,6 +710,7 @@ def _reconstruct_textlayer_tables(
                     from ahcc.profile.extract_metrics import _parse_number  # noqa: F811 已在分类器延迟导入
 
                     label_parts: list[str] = []
+                    label_bbox: list[float] | None = None
                     last_numeric_cell: TableCell | None = None
                     last_numeric_x1 = -1.0
                     pending_cells: list[TableCell] = []
@@ -706,16 +719,26 @@ def _reconstruct_textlayer_tables(
                         if not text:
                             continue
                         xc = (w[0] + w[2]) / 2
+                        word_bbox = (w[0], w[1], w[2], w[3])
                         if (
                             _parse_number(text) is not None
                             and not _FASTPATH_CJK_RE.search(text)
                         ):
-                            cell = TableCell(row=d_idx, col=_col_for_xc(xc), text=text)
+                            cell = TableCell(
+                                row=d_idx, col=_col_for_xc(xc), text=text, bbox=word_bbox
+                            )
                             pending_cells.append(cell)
                             last_numeric_cell = cell
                             last_numeric_x1 = w[2]
                         elif xc < label_boundary:
                             label_parts.append(text)
+                            if label_bbox is None:
+                                label_bbox = [w[0], w[1], w[2], w[3]]
+                            else:
+                                label_bbox[0] = min(label_bbox[0], w[0])
+                                label_bbox[1] = min(label_bbox[1], w[1])
+                                label_bbox[2] = max(label_bbox[2], w[2])
+                                label_bbox[3] = max(label_bbox[3], w[3])
                         elif (
                             text in _UNIT_SUFFIX_TOKENS
                             and last_numeric_cell is not None
@@ -723,19 +746,48 @@ def _reconstruct_textlayer_tables(
                         ):
                             # 单位后缀（"-0.06 个百分点"）：贴回前一个数值单元格
                             last_numeric_cell.text += text
+                            if last_numeric_cell.bbox:
+                                bx0, by0, bx1, by1 = last_numeric_cell.bbox
+                                last_numeric_cell.bbox = (
+                                    min(bx0, w[0]),
+                                    min(by0, w[1]),
+                                    max(bx1, w[2]),
+                                    max(by1, w[3]),
+                                )
                         else:
                             # 段内独立文本词（"不适用"/"-"）：按列归位成文本单元格
                             pending_cells.append(
-                                TableCell(row=d_idx, col=_col_for_xc(xc), text=text)
+                                TableCell(
+                                    row=d_idx, col=_col_for_xc(xc), text=text, bbox=word_bbox
+                                )
                             )
                     if label_parts:
-                        cells.append(TableCell(row=d_idx, col=0, text="".join(label_parts)))
+                        cells.append(
+                            TableCell(
+                                row=d_idx,
+                                col=0,
+                                text="".join(label_parts),
+                                bbox=tuple(label_bbox) if label_bbox else None,
+                            )
+                        )
                     cells.extend(pending_cells)
 
                 if len(cells) < 8:
                     prev_group_last_y0 = group_last_y0
                     continue
 
+                # 表级 bbox = 单元格坐标并集（词坐标已在手，零额外解析成本）
+                cell_bboxes = [c.bbox for c in cells if c.bbox]
+                table_bbox = (
+                    (
+                        min(b[0] for b in cell_bboxes),
+                        min(b[1] for b in cell_bboxes),
+                        max(b[2] for b in cell_bboxes),
+                        max(b[3] for b in cell_bboxes),
+                    )
+                    if cell_bboxes
+                    else (0.0, 0.0, 0.0, 0.0)
+                )
                 tables.append(
                     FinancialTable(
                         table_id=f"A_p{page_num:03d}_textlayer_t{group_idx:02d}",
@@ -743,7 +795,7 @@ def _reconstruct_textlayer_tables(
                             zh=f"第{page_num}页文本层表格", en=f"p{page_num} text-layer grid"
                         ),
                         page=page_num,
-                        bbox=(0.0, 0.0, 1.0, 1.0),
+                        bbox=table_bbox,
                         cells=cells,
                         currency=Currency.CNY,
                     )
@@ -871,16 +923,20 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
             if _is_financial_page(page_text):
                 financial_pages.add(i)
                 try:
-                    page_tables = page.extract_tables()
-                    page_tables = [t for t in page_tables if _is_useful_a_raw_table(t)]
+                    # find_tables（而非 extract_tables）：Table 对象带 bbox，
+                    # 表级坐标透传给 FinancialTable.bbox（证据链定位）
+                    found_tables = page.find_tables()
+                    page_tables = [(ft.bbox, ft.extract()) for ft in found_tables]
+                    page_tables = [t for t in page_tables if _is_useful_a_raw_table(t[1])]
                 except Exception as e:
                     page_tables = []
                     audit_flags.append("table_page_failed")
                     audit_warnings.append(f"Table extraction failed on page {i}: {e}")
                 if not page_tables and _looks_like_a_table_page(page_text):
                     try:
-                        page_tables = page.extract_tables(table_settings=_A_PDFPLUMBER_TEXT_SETTINGS) or []
-                        page_tables = [t for t in page_tables if _is_useful_a_raw_table(t)]
+                        found_tables = page.find_tables(table_settings=_A_PDFPLUMBER_TEXT_SETTINGS)
+                        page_tables = [(ft.bbox, ft.extract()) for ft in found_tables]
+                        page_tables = [t for t in page_tables if _is_useful_a_raw_table(t[1])]
                         if page_tables:
                             pdfplumber_text_pages.add(i)
                     except Exception as e:
@@ -888,9 +944,9 @@ def parse_a_pdf(file_path: str) -> ReportDocument:
                         audit_warnings.append(f"Text-strategy table extraction failed on page {i}: {e}")
                 if page_tables:
                     table_page_nums.add(i)
-                    for j, t in enumerate(page_tables, start=1):
+                    for j, (t_bbox, t) in enumerate(page_tables, start=1):
                         source = "text" if i in pdfplumber_text_pages else "pl"
-                        ft = _convert_table(t, i, j, f"A_p{i:03d}_{source}_t{j:02d}")
+                        ft = _convert_table(t, i, j, f"A_p{i:03d}_{source}_t{j:02d}", bbox=t_bbox)
                         tables.append(ft)
 
     # 用 camelot 补充（尤其跨页/复杂表格）
@@ -1162,8 +1218,18 @@ def _page_range_string(pages: set[int]) -> str:
     return ",".join(str(page) for page in clean) if clean else "all"
 
 
-def _convert_table(raw_table: list[list[str | None]], page: int, table_idx: int, table_id: str) -> FinancialTable:
-    """将 pdfplumber 原始表格转为 FinancialTable。"""
+def _convert_table(
+    raw_table: list[list[str | None]],
+    page: int,
+    table_idx: int,
+    table_id: str,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> FinancialTable:
+    """将 pdfplumber 原始表格转为 FinancialTable。
+
+    bbox：pdfplumber find_tables 的表级坐标（x0, top, x1, bottom，页顶原点），
+    缺省 (0,0,0,0)（camelot/PPStructure 路径暂无坐标）。
+    """
     cells: list[TableCell] = []
     if not raw_table:
         return FinancialTable(
@@ -1192,11 +1258,12 @@ def _convert_table(raw_table: list[list[str | None]], page: int, table_idx: int,
     if inferred:
         section = sorted(inferred)[0]
 
+    safe_bbox = bbox if bbox and (bbox[2] > bbox[0] and bbox[3] > bbox[1]) else (0.0, 0.0, 0.0, 0.0)
     return FinancialTable(
         table_id=table_id,
         title=LocalizedString(zh=title),
         page=page,
-        bbox=(0.0, 0.0, 0.0, 0.0),
+        bbox=safe_bbox,
         cells=cells,
         section=section,
     )
