@@ -261,3 +261,22 @@ def test_round_number_permutation_is_not_treated_as_column_shuffle():
     assert diffs == []
     assert stats.permuted_tables == 0
     assert stats.skipped_low_anchor == 1
+
+
+def test_build_table_rows_kind_role_without_period() -> None:
+    """列键有值种类但无期间的列（增减% 列头）→ role=kind:change_pct。
+
+    回归：ValueKind 曾在 _build_table_rows 内局部导入而 _column_role 在模块级
+    引用，真实 H 股表（kind/scope 列）触发 NameError 使整条 twin 检查腿失败。
+    """
+    table = _table(
+        "kind-role-t1",
+        10,
+        [["营业收入", "100,000", "(67.25)"]],
+        ["项目", "金额", "增减(%)"],
+    )
+    rows = _build_table_rows(table)
+    assert ("营业收入", "kind:change_pct") in rows.rows
+    assert rows.rows[("营业收入", "kind:change_pct")].value == -67.25
+    # 金额列无期间语义 → 回退位置列号
+    assert ("营业收入", "col1") in rows.rows

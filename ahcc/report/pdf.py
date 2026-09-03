@@ -58,10 +58,13 @@ def _evidence_location(diff) -> str:
 
 
 def _side_location_text(diff, side: str, side_label: str) -> str:
+    # PDF 版面单卡容不下大分组（整列错乱 40 行明细会超出页框）—— 封顶展示，
+    # 全量明细在 Excel 报告与结果页（按组展开）可查，检出信息不丢失
+    _MAX_ITEMS_IN_CARD = 6
     explanation = getattr(diff, "diff_explanation", None)
     if explanation and explanation.items:
         lines = []
-        for item in explanation.items:
+        for item in explanation.items[:_MAX_ITEMS_IN_CARD]:
             page = item.a_page if side == "A" else item.h_page
             value = item.a_value if side == "A" else item.h_value
             snippet = item.a_snippet if side == "A" else item.h_snippet
@@ -69,8 +72,11 @@ def _side_location_text(diff, side: str, side_label: str) -> str:
             label = item.label or "取值"
             line = f"{page_text} | {label}: {_fmt_num(value)}"
             if snippet:
-                line += f" | {snippet}"
+                line += f" | {snippet[:60]}"
             lines.append(line)
+        remaining = len(explanation.items) - _MAX_ITEMS_IN_CARD
+        if remaining > 0:
+            lines.append(f"……另有 {remaining} 处行级明细，见 Excel 报告或结果页分组展开")
         return "\n".join(lines)
     evidence = [e for e in diff.evidence if (e.side.value if hasattr(e.side, "value") else e.side) == side]
     return "\n".join(

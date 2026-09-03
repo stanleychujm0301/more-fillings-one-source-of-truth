@@ -136,6 +136,8 @@ def _column_role(key, table: FinancialTable, rows: dict, row_idx: int, cell) -> 
     旧 role 只有年份或裸列号 —— 两侧列序不同的表 (label, col2)≠(label, col2)
     配不上；语义化后 (label, '2024-12-31') 跨侧相等，本期/上期互换也可判。
     """
+    from ahcc.schemas import ValueKind
+
     if key is not None:
         if key.period:
             return key.period
@@ -151,7 +153,6 @@ def _column_role(key, table: FinancialTable, rows: dict, row_idx: int, cell) -> 
 
 def _build_table_rows(table: FinancialTable) -> _TableRows:
     """把一张表的 cells 还原成 (标签, 列角色) -> 数值 的行映射。"""
-    from ahcc.schemas import ValueKind
     from ahcc.table import grid_for
 
     result = _TableRows(table=table)
