@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
-from functools import lru_cache
 from typing import Optional
 from uuid import uuid4
 
@@ -39,6 +39,12 @@ _CURRENT_RESULT_VERSION = 19
 # 堵死 20+ 分钟、整站无响应。≥ floor 的结果只补当前元数据并标 stale_result
 # （提示用户重跑获取新引擎结果），数值差异保留原样。
 _NUMERIC_REBUILD_FLOOR = 17
+# < floor 的存量结果由 scripts/migrate_legacy_results.py 一次性离线升级并写回库，
+# 此后读取路径永远命中 version ≥ _CURRENT_RESULT_VERSION 的快路径。下面的缓存只
+# 是「迁移之前 / 迁移遗漏」的兜底，锁的意义见 _load_current_numeric_diffs。
+_NUMERIC_DIFF_CACHE: dict[str, tuple[Diff, ...]] = {}
+_NUMERIC_DIFF_LOCKS: dict[str, threading.Lock] = {}
+_NUMERIC_DIFF_LOCK_GUARD = threading.Lock()
 _RUNNING_JOB_STATUSES = {
     JobStatus.PENDING.value,
     JobStatus.PARSING.value,
@@ -663,8 +669,32 @@ def _profile_from_snapshot(snapshot: dict | None) -> ReportProfile | None:
     )
 
 
-@lru_cache(maxsize=128)
 def _load_current_numeric_diffs(job_id: str) -> tuple[Diff, ...]:
+    """带 per-job 锁的记忆化重算。
+
+    原实现是裸 `@lru_cache`。lru_cache 只在计算**结束后**才写缓存，对并发重复
+    调用没有任何去重：前端每 2.5 秒轮询一次 `/api/jobs/history?limit=30`
+    （App.tsx loadHistory），而单次 limit=30 的冷重算实测 188 秒 —— 第一次还没
+    算完，后面几十次轮询已各自在线程池里开了一份同样的全量重算，一起抢 GIL，
+    服务再也回不来（静态文件都要 1.5 秒，/health 28 秒）。加 per-job 锁后同一
+    任务同一时刻至多算一份，其余调用方在锁上等现成结果。
+    """
+    cached = _NUMERIC_DIFF_CACHE.get(job_id)
+    if cached is not None:
+        return cached
+    with _NUMERIC_DIFF_LOCK_GUARD:
+        lock = _NUMERIC_DIFF_LOCKS.setdefault(job_id, threading.Lock())
+    with lock:
+        # 双检：等锁期间持锁者可能已经把结果放进缓存。
+        cached = _NUMERIC_DIFF_CACHE.get(job_id)
+        if cached is not None:
+            return cached
+        computed = _compute_current_numeric_diffs(job_id)
+        _NUMERIC_DIFF_CACHE[job_id] = computed
+        return computed
+
+
+def _compute_current_numeric_diffs(job_id: str) -> tuple[Diff, ...]:
     profile_a_raw, profile_h_raw = _load_profile_snapshots(job_id)
     profile_a = _profile_from_snapshot(profile_a_raw)
     profile_h = _profile_from_snapshot(profile_h_raw)

@@ -54,6 +54,22 @@ All notable changes to this project will be documented in this file.
   篡改稀疏，整列被打乱恰好违反该假设。
 - 评估口径：新增 `KNOWN_TRUE_POSITIVES`，把已核实为样本自带的真实差异从
   FP 上界与 hard FP 中扣除并单列。此前「干净对 FP=0」是一个奖励删检出的指标。
+- 整站无响应（`_NUMERIC_REBUILD_FLOOR` 没盖住实际数据）。上一版把 floor 定在
+  17 并用 `list_jobs(limit=10)` 验证「历史 0.09s」，但前端 `loadHistory` 请求的
+  是 `limit=30`，而那 30 条里有 16 条停在 v16 —— 正好比 floor 低一级，每次读取
+  仍全量重跑数值检查。实测 `limit=30` 冷启动 188.20s；history 每 2.5 秒轮询一
+  次，裸 `lru_cache` 只在算完后才写缓存、不合并并发调用，几十份同样的全量重算
+  一起抢 GIL，静态文件要 1.5 秒、`/health` 28 秒、页面打不开。两道修复：
+  （1）新增 `scripts/migrate_legacy_results.py`，把 < floor 的存量结果一次性
+  离线升级并**写回库**（summary/diffs/coverage_items 三处），原版本号记入
+  `upgraded_from_result_version` 留痕；此后读取永远命中快路径，重启不再重付。
+  （2）`_load_current_numeric_diffs` 改为 per-job 锁 + 双检记忆化，同一任务
+  同一时刻至多算一份。
+  验证：真实库 17 个任务全部迁移，逐任务按内容键比对差异集合 **0 丢失 0 新增**
+  （diff_id 每次重算都会变，不是稳定键，故用 rule_id/canonical_key/取值比对）；
+  `list_jobs(limit=30)` 188.20s → 0.074s；服务 2 分钟 CPU 257s → 1.7s、
+  常驻内存 628MB → 103MB、数值重算 0 次；`/app` 1.5s → 0.003s、
+  `/health` 28s → 0.003s。
 
 ## [0.1.0] - 2026-06-25
 
